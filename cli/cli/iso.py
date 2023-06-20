@@ -11,13 +11,15 @@ from ps2exe import get_iso_info
 
 LOGGER = logging.getLogger(__name__)
 PROGRESS_MANAGER = enlighten.get_manager()
+BUFFER_SIZE = 1024 * 1024
 
 
 def process_iso(iso_filename):
     info = get_iso_info(iso_filename, True)
     contents = get_iso_contents(iso_filename)
+    metadata = get_image_metadata(iso_filename)
 
-    return {"info": info, "contents": contents}
+    return {"info": info, "contents": contents, "metadata": metadata}
 
 
 def get_iso_contents(iso_filename):
@@ -118,3 +120,32 @@ def get_iso_files(iso_filename):
         files.append(props)
 
     return files
+
+
+def get_image_metadata(filename):
+    file_hashes = hashes(filename)
+
+    return {
+        "size": os.path.getsize(filename),
+        "md5": file_hashes["md5"],
+        "sha1": file_hashes["sha1"],
+        "sha256": file_hashes["sha256"],
+    }
+
+
+def hashes(filename):
+    hashes = {}
+    digests = {}
+
+    for algorithm in ("md5", "sha1", "sha256"):
+        hashes[algorithm] = getattr(hashlib, algorithm)()
+
+    with open(filename, "rb") as file:
+        while chunk := file.read(BUFFER_SIZE):
+            for hash in hashes.values():
+                hash.update(chunk)
+
+    for algorithm, hash in hashes.items():
+        digests[algorithm] = hash.hexdigest()
+
+    return digests

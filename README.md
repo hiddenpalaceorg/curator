@@ -29,7 +29,7 @@ $./curator 'Sonic 3D Blast (Tech Demo).iso'
 
 ```xml
 <datafile>
-  <image name="Sonic 3D (Tech Demo - Oct 08).bin">
+  <image name="Sonic 3D (Tech Demo - Oct 08).bin" size="12780768" md5="b9524503fd30bb52b527ce6b3ebb9898" sha1="cc344a2d466c4fc75c588ae584fad449b930170e" sha256="45891ddfa4ae1718889e6d83871df3faa6b4cfe1ea2dd483f051fef1543f65d4">
     <info>
       <system name="saturn" identifier="SEGA SEGASATURN" />
       <header title="GAME TITLE" product_number="999999999" product_version="V1.000" release_date="19941122" maker_id="SEGA ENTERPRISES" device_info="CD-1/1" regions="JUE" />

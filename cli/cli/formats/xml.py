@@ -5,7 +5,8 @@ import xml.etree.ElementTree as ET
 def format(info):
     xml = ET.Element("datafile")
 
-    image = ET.SubElement(xml, "image", name=info["info"]["name"])
+    info["metadata"]["size"] = str(info["metadata"]["size"])
+    image = ET.SubElement(xml, "image", name=info["info"]["name"], **info["metadata"])
 
     info_element = ET.SubElement(image, "info")
 
