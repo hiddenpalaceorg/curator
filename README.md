@@ -24,7 +24,7 @@ Note: You might have to initialize git submodules.
 # Example
 
 ```
-$./curator 'Sonic 3D Blast (Tech Demo).iso'
+$ ./curator 'Sonic 3D Blast (Tech Demo).iso'
 ```
 
 ```xml
