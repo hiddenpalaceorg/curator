@@ -9,15 +9,15 @@
 or
 
 ```
-cd cli
-poetry run cli path/to/image.iso
+cd curator-cli
+poetry run curator-cli path/to/image.iso
 ```
 
 # Installing from source
 
 1. Install Python
 2. Install [Poetry for Python](https://python-poetry.org/docs/)
-3. Run `cd cli && poetry install`
+3. Run `cd curator-cli && poetry install`
 
 Note: You might have to initialize git submodules.
 
