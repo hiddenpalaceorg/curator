@@ -1,6 +1,8 @@
 from datetime import datetime
 import xml.etree.ElementTree as ET
 
+from cli.version import version_string
+
 
 def format(info):
     xml = ET.Element("datafile")
@@ -15,6 +17,8 @@ def format(info):
     contents = ET.SubElement(image, "contents")
     for file in info["contents"]:
         format_contents(contents, file)
+
+    ET.SubElement(xml, "version").text = f"curator-cli {version_string()}"
 
     ET.indent(xml, level=0)
     return ET.tostring(xml, encoding="unicode")
