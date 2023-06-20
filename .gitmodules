@@ -1,0 +1,6 @@
+[submodule "lib/ps2exe"]
+	path = lib/ps2exe
+	url = https://github.com/hiddenpalaceorg/ps2exe
+[submodule "lib/dat"]
+	path = lib/dat
+	url = https://github.com/hiddenpalaceorg/dat

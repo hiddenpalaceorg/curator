@@ -1,0 +1,16 @@
+[tool.poetry]
+name = "cli"
+version = "0.0.1"
+description = ""
+authors = ["Hidden Palace <hp@hiddenpalace.org>"]
+
+[tool.poetry.dependencies]
+python = ">=3.10,<3.12"
+ps2exe = {path = "../lib/ps2exe", develop = true}
+
+[tool.poetry.scripts]
+cli = 'cli.main:main'
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
