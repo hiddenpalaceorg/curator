@@ -17,7 +17,9 @@ poetry run curator-cli path/to/image.iso
 
 1. Install Python
 2. Install [Poetry for Python](https://python-poetry.org/docs/)
-3. Run `cd curator-cli && poetry install`
+3. Run `git clone --recurse-submodules git@github.com:hiddenpalaceorg/curator.git` to clone together with submodules
+4. Run `cd curator-cli && poetry install`
+5. Run `./curator` from the `curator` directory (not `curator-cli`)
 
 Note: You might have to initialize git submodules.
 
