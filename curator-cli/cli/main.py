@@ -9,7 +9,7 @@ def main():
     format = get_formatter(args)
 
     for filename in args.file:
-        info = process_iso(filename)
+        info = process_iso(filename, args.no_checksums)
         print(format(info))
 
 
@@ -29,5 +29,6 @@ def parse_args():
 
     parser.add_argument("file", nargs="+", help="files to process")
     parser.add_argument("--format", "-f", choices=["json", "xml"], default="xml")
+    parser.add_argument("--no-checksums", action="store_true")
 
     return parser.parse_args()

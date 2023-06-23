@@ -64,9 +64,9 @@ def format_info(element, info):
 def format_related(element, name, info, key_map):
     output = {}
     for key, mapped in key_map.items():
-        if value := info[key]:
+        if (value := info.get(key)):
             if isinstance(value, datetime):
-                value = value.strftime("%Y-%m-%d %H:%M:%S")
+                value = value.strftime("%Y-%m-%dT%H:%M:%S")
             output[mapped] = value
     if output:
         return ET.SubElement(element, name, **output)

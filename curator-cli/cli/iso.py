@@ -14,16 +14,16 @@ PROGRESS_MANAGER = enlighten.get_manager()
 BUFFER_SIZE = 1024 * 1024
 
 
-def process_iso(iso_filename):
+def process_iso(iso_filename, no_checksums):
     info = get_iso_info(iso_filename, True)
-    contents = get_iso_contents(iso_filename)
-    metadata = get_image_metadata(iso_filename)
+    contents = get_iso_contents(iso_filename, no_checksums)
+    metadata = get_image_metadata(iso_filename, no_checksums)
 
     return {"info": info, "contents": contents, "metadata": metadata}
 
 
-def get_iso_contents(iso_filename):
-    files = get_iso_files(iso_filename)
+def get_iso_contents(iso_filename, no_checksums):
+    files = get_iso_files(iso_filename, no_checksums)
     tree = get_file_tree(files)
 
     return tree
@@ -63,7 +63,7 @@ def get_file_tree(files):
     return root
 
 
-def get_iso_files(iso_filename):
+def get_iso_files(iso_filename, no_checksums):
     iso_path = iso_filename.encode("cp1252", errors="replace")
     basename = os.path.basename(iso_filename).encode("cp1252", errors="replace")
     LOGGER.info("Reading %s", iso_path.decode("cp1252"))
@@ -98,7 +98,7 @@ def get_iso_files(iso_filename):
     for file in path_reader.iso_iterator(root, recursive=True, include_dirs=True):
         file_date = path_reader.get_file_date(file)
         if file_date:
-            file_date = file_date.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+            file_date = file_date.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
 
         md5_hash = ""
         sha1_hash = ""
@@ -110,7 +110,7 @@ def get_iso_files(iso_filename):
             "directory": file.is_dir(),
         }
 
-        if not path_reader.is_directory(file):
+        if not path_reader.is_directory(file) and not no_checksums:
             props["md5"] = path_reader.get_file_hash(file, hashlib.md5).hexdigest()
             props["sha1"] = path_reader.get_file_hash(file, hashlib.sha1).hexdigest()
             props["sha256"] = path_reader.get_file_hash(
@@ -122,15 +122,15 @@ def get_iso_files(iso_filename):
     return files
 
 
-def get_image_metadata(filename):
-    file_hashes = hashes(filename)
+def get_image_metadata(filename, no_checksums):
+    metadata = {"size": os.path.getsize(filename)}
 
-    return {
-        "size": os.path.getsize(filename),
-        "md5": file_hashes["md5"],
-        "sha1": file_hashes["sha1"],
-        "sha256": file_hashes["sha256"],
-    }
+    if not no_checksums:
+        file_hashes = hashes(filename)
+        for hash_type, file_hash in file_hashes.items():
+            metadata[hash_type] = file_hash
+
+    return metadata
 
 
 def hashes(filename):
