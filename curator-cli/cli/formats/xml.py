@@ -4,7 +4,7 @@ import xml.etree.ElementTree as ET
 from cli.version import version_string
 
 
-def format(info):
+def format(info, date_format):
     xml = ET.Element("datafile")
 
     info["metadata"]["size"] = str(info["metadata"]["size"])
@@ -12,7 +12,7 @@ def format(info):
 
     info_element = ET.SubElement(image, "info")
 
-    format_info(info_element, info["info"])
+    format_info(info_element, info["info"], date_format)
 
     contents = ET.SubElement(image, "contents")
     for file in info["contents"]:
@@ -24,9 +24,13 @@ def format(info):
     return ET.tostring(xml, encoding="unicode")
 
 
-def format_info(element, info):
+def format_info(element, info, date_format):
     format_related(
-        element, "system", info, {"system": "name", "system_identifier": "identifier"}
+        element,
+        "system",
+        info,
+        {"system": "name", "system_identifier": "identifier"},
+        date_format,
     )
     format_related(
         element,
@@ -41,6 +45,7 @@ def format_info(element, info):
             "header_device_info": "device_info",
             "header_regions": "regions",
         },
+        date_format,
     )
     format_related(
         element,
@@ -54,19 +59,25 @@ def format_info(element, info):
             "volume_expiration_date": "expiration_date",
             "volume_effective_date": "effective_date",
         },
+        date_format,
     )
     format_related(
-        element, "exe", info, {"exe_filename": "filename", "exe_date": "date"}
+        element,
+        "exe",
+        info,
+        {"exe_filename": "filename", "exe_date": "date"},
+        date_format,
     )
-    format_related(element, "disc", info, {"disc_type": "type"})
+
+    format_related(element, "disc", info, {"disc_type": "type"}, date_format)
 
 
-def format_related(element, name, info, key_map):
+def format_related(element, name, info, key_map, date_format):
     output = {}
     for key, mapped in key_map.items():
-        if value := info[key]:
+        if value := info.get(key):
             if isinstance(value, datetime):
-                value = value.strftime("%Y-%m-%d %H:%M:%S")
+                value = value.strftime(date_format)
             output[mapped] = value
     if output:
         return ET.SubElement(element, name, **output)
