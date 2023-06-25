@@ -1,7 +1,8 @@
 name: Build release files
 
 on:
-  release: [released]
+  release: 
+    - types: [released]
   workflow_dispatch:
 
 jobs:
