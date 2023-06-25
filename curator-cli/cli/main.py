@@ -8,9 +8,14 @@ def main():
 
     format = get_formatter(args)
 
+    if args.date_format == "iso8601":
+        date_format = "%Y-%m-%dT%H:%M:%S"
+    else:
+        date_format = "%Y-%m-%d %H:%M:%S"
+
     for filename in args.file:
-        info = process_iso(filename, args.no_checksums)
-        print(format(info))
+        info = process_iso(filename, date_format, args.no_checksums)
+        print(format(info, date_format))
 
 
 def get_formatter(args):
@@ -29,6 +34,9 @@ def parse_args():
 
     parser.add_argument("file", nargs="+", help="files to process")
     parser.add_argument("--format", "-f", choices=["json", "xml"], default="xml")
+    parser.add_argument(
+        "--date-format", choices=["default", "iso8601"], default="default"
+    )
     parser.add_argument("--no-checksums", action="store_true")
 
     return parser.parse_args()

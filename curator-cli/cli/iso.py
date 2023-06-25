@@ -14,16 +14,16 @@ PROGRESS_MANAGER = enlighten.get_manager()
 BUFFER_SIZE = 1024 * 1024
 
 
-def process_iso(iso_filename, no_checksums):
+def process_iso(iso_filename, date_format, no_checksums):
     info = get_iso_info(iso_filename, True)
-    contents = get_iso_contents(iso_filename, no_checksums)
+    contents = get_iso_contents(iso_filename, date_format, no_checksums)
     metadata = get_image_metadata(iso_filename, no_checksums)
 
     return {"info": info, "contents": contents, "metadata": metadata}
 
 
-def get_iso_contents(iso_filename, no_checksums):
-    files = get_iso_files(iso_filename, no_checksums)
+def get_iso_contents(iso_filename, date_format, no_checksums):
+    files = get_iso_files(iso_filename, date_format, no_checksums)
     tree = get_file_tree(files)
 
     return tree
@@ -63,7 +63,7 @@ def get_file_tree(files):
     return root
 
 
-def get_iso_files(iso_filename, no_checksums):
+def get_iso_files(iso_filename, date_format, no_checksums):
     iso_path = iso_filename.encode("cp1252", errors="replace")
     basename = os.path.basename(iso_filename).encode("cp1252", errors="replace")
     LOGGER.info("Reading %s", iso_path.decode("cp1252"))
@@ -98,7 +98,7 @@ def get_iso_files(iso_filename, no_checksums):
     for file in path_reader.iso_iterator(root, recursive=True, include_dirs=True):
         file_date = path_reader.get_file_date(file)
         if file_date:
-            file_date = file_date.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+            file_date = file_date.astimezone(timezone.utc).strftime(date_format)
 
         md5_hash = ""
         sha1_hash = ""
