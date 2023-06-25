@@ -13,5 +13,9 @@ ps2exe = {path = "../lib/ps2exe", develop = true}
 curator-cli = 'cli.main:main'
 
 [build-system]
-requires = ["poetry-core"]
-build-backend = "poetry.core.masonry.api"
+requires = [
+    "setuptools >= 42.0.0",
+    "setuptools_scm >= 2.0.0",
+    "wheel >= 0.29.0",
+]
+build-backend = 'setuptools.build_meta'
