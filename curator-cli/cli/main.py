@@ -1,4 +1,5 @@
 import argparse
+import ctypes
 
 from cli.iso import process_iso
 
