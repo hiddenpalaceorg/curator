@@ -41,3 +41,6 @@ def parse_args():
     parser.add_argument("--no-checksums", action="store_true")
 
     return parser.parse_args()
+
+if __name__ == '__main__':
+    main()
