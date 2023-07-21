@@ -145,3 +145,9 @@ $ ./curator 'Sonic 3D Blast (Tech Demo).iso'
   </image>
 </datafile>
 ```
+
+# Contributors
+
+<table>
+<tr><td align="center"><a href="https://github.com/travistyoj"><div style="display: flex"><img src="https://avatars.githubusercontent.com/u/6852708" style="height: 40px; margin: auto"></div><div style="text-align: center">travistyoj</div></a></td></tr>
+</table>
