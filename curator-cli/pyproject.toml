@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "curator-cli"
-version = "0.0.2"
+version = "0.0.3"
 description = ""
 authors = ["Hidden Palace <hp@hiddenpalace.org>"]
 packages = [{include = "cli"}]
