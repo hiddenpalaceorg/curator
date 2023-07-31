@@ -85,7 +85,9 @@ def format_related(element, name, info, key_map, date_format):
 
 def format_contents(element, file):
     if file.get("type", "file") == "dir":
-        props = {"name": file["name"], "date": file["date"], "size": file["size"]}
+        props = {"name": file["name"], "date": file["date"]}
+        if "size" in file:
+            props["size"] = file["size"]
 
         dir = ET.SubElement(element, "directory", props)
         for file in file["files"]:
