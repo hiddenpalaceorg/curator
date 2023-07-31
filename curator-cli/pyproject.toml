@@ -19,6 +19,7 @@ pathlab = "^0.2"
 xxhash = "^3.2.0"
 ps2exe = {path = "../lib/ps2exe", develop = true}
 machfs = "^1.3"
+pyinstaller = "^5.13.0"
 
 [tool.poetry.scripts]
 curator-cli = 'cli.main:main'
