@@ -8,6 +8,7 @@ import enlighten
 from ps2exe import IsoProcessorFactory
 from ps2exe import BaseIsoProcessor
 from ps2exe import get_iso_info
+from ps2exe import apply_patches
 
 LOGGER = logging.getLogger(__name__)
 PROGRESS_MANAGER = enlighten.get_manager()
@@ -15,6 +16,7 @@ BUFFER_SIZE = 1024 * 1024
 
 
 def process_iso(iso_filename, date_format, no_checksums):
+    apply_patches()
     info = get_iso_info(iso_filename, True)
     contents = get_iso_contents(iso_filename, date_format, no_checksums)
     metadata = get_image_metadata(iso_filename, no_checksums)
@@ -48,11 +50,12 @@ def get_file_tree(files):
         if is_dir:
             dir = {
                 "name": file["name"],
-                "size": file["size"],
                 "date": file["date"],
                 "type": "dir",
                 "files": [],
             }
+            if "size" in file:
+                dir["size"] = file["size"]
             directories[-1]["files"].append(dir)
             directories.append(dir)
         else:
@@ -106,9 +109,13 @@ def get_iso_files(iso_filename, date_format, no_checksums):
         props = {
             "name": path_reader.get_file_path(file).lstrip("/"),
             "date": file_date,
-            "size": str(path_reader.get_file_size(file)),
-            "directory": file.is_dir(),
+            "directory": path_reader.is_directory(file),
         }
+        
+        try:
+            props["size"] = str(path_reader.get_file_size(file))
+        except AttributeError:
+            pass
 
         if not path_reader.is_directory(file) and not no_checksums:
             props["md5"] = path_reader.get_file_hash(file, hashlib.md5).hexdigest()
