@@ -453,6 +453,7 @@ export {
 export { hashPassword, verifyPassword, needsRehash } from "./auth/passwords";
 export { createHandlers, createToken, type CubeHandlers } from "./http/index";
 export { diffRevisions, type RevisionDiff } from "./diff";
+export { canReadResolution } from "./resolve";
 export {
   localDirStorage,
   s3Storage,

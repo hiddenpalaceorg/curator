@@ -8,7 +8,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { headers } from "next/headers";
 import { notFound, redirect } from "next/navigation";
-import { isTitleError, normalizeTitle } from "cube";
+import { canReadResolution, isTitleError, normalizeTitle } from "cube";
 import { getModeratorFromHeaders } from "@/lib/auth";
 import { getCube, pageHref } from "@/cube/cube";
 import { renderWikiMarkdown } from "@/cube/render";
@@ -67,7 +67,7 @@ export default async function WikiPage({ params, searchParams }: Props) {
   // ?redirect=no lands on the redirect page itself instead of its target,
   // which is what the "Redirected from" link offers.
   const resolved = await cube.api.resolve(title, {
-    followRedirect: sp0.redirect !== "no",
+    followRedirect: !editing && sp0.redirect !== "no",
   });
   if (!resolved) {
     // Missing page: the edit view creates it; readers get a create prompt.
@@ -116,6 +116,10 @@ export default async function WikiPage({ params, searchParams }: Props) {
   }
 
   // Canonicalize display-form URLs to the dbkey form, keeping the view params.
+  if (!(await canReadResolution(cube, resolved, async (page) =>
+    page.visibility !== "moderator" || !!(await getModeratorFromHeaders(await headers()))))) {
+    notFound();
+  }
   const canonical = pageHref(resolved.redirectedFrom ?? resolved);
   const requested = `/${slug.map((s) => encodeURIComponent(decodeURIComponent(s))).join("/")}`;
   if (requested !== canonical && (resolved.redirectedFrom ?? resolved).ns === "main") {
