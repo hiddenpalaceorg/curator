@@ -14,6 +14,7 @@ import {
 import { referencedAssets, MAX_BUILD_ASSET_BYTES } from "@/lib/submission-assets";
 import { rateLimitCheck, clientKey } from "@/lib/ratelimit";
 import { isSha256 } from "@/lib/validate";
+import { releaseReapedUploadQuota, withUploadQuota } from "@/lib/upload-quota";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -63,6 +64,7 @@ export async function PUT(
     return Response.json({ error: "build's total asset bytes exceed the cap" }, { status: 413 });
   }
 
+  return withUploadQuota(getPool(), assetSha, claimed, async () => {
   if (await blobExists(assetSha)) return Response.json({ sha256: assetSha, status: "exists" });
 
   const rawOffset = new URL(request.url).searchParams.get("offset") ?? "0";
@@ -76,7 +78,7 @@ export async function PUT(
   // endpoint is unauthenticated, so a partial-upload flood must never fill the
   // store out from under Postgres and the transcode caches. The reserve is kept
   // regardless of how many distinct blobs are in flight.
-  await reapStaleAssetStaging();
+  await releaseReapedUploadQuota(getPool(), await reapStaleAssetStaging());
   if (!(await hasStagingHeadroom(claimed - offset))) {
     return Response.json({ error: "insufficient storage" }, { status: 507 });
   }
@@ -137,4 +139,5 @@ export async function PUT(
   const outcome = await storeBlobFromFile(assetSha, part);
   if (outcome === "exists") return Response.json({ sha256: assetSha, status: "exists" });
   return Response.json({ sha256: assetSha, status: "stored" }, { status: 201 });
+  });
 }

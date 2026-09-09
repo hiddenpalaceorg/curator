@@ -472,3 +472,18 @@ CREATE TABLE extract_revision (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX idx_extract_revision_extract ON extract_revision(extract_id, id DESC);
+
+-- Pending-upload accounting is user data, preserved across corpus reloads.
+CREATE TABLE upload_quota_config (
+  id boolean PRIMARY KEY DEFAULT true CHECK (id),
+  initialized boolean NOT NULL DEFAULT false,
+  store_identity text,
+  limit_bytes bigint NOT NULL DEFAULT 10000000000000 CHECK (limit_bytes > 0)
+);
+INSERT INTO upload_quota_config(id) VALUES (true);
+CREATE TABLE upload_quota (
+  sha256 text PRIMARY KEY CHECK (sha256 ~ '^[0-9a-f]{64}$'),
+  bytes bigint NOT NULL CHECK (bytes >= 0),
+  active integer NOT NULL DEFAULT 0 CHECK (active >= 0),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
