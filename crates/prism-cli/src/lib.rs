@@ -194,7 +194,8 @@ pub fn run(args: Vec<String>, fallback_adapter: Option<AdapterCommand>) -> i32 {
     let cli = match Cli::try_parse_from(args) {
         Ok(cli) => cli,
         Err(e) => {
-            let _ = e.print();
+            let message = crate::out::terminal_text(&e.to_string());
+            if e.use_stderr() { errln!("{message}"); } else { out!("{message}"); }
             return e.exit_code();
         }
     };
@@ -249,7 +250,9 @@ fn execute(cli: Cli, fallback_adapter: Option<AdapterCommand>) -> Result<()> {
                 errln!("exported {n} builds -> {}", p.display());
             }
             None => {
-                let n = analyzer.export_jsonl(std::io::stdout().lock())?;
+                use std::io::IsTerminal;
+                let stdout = std::io::stdout();
+                let n = analyzer.export_jsonl(crate::out::TerminalWriter::new(stdout.lock(), stdout.is_terminal()))?;
                 errln!("exported {n} builds");
             }
         },
