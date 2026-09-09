@@ -154,7 +154,7 @@ public sealed class PrismService
     {
         using var file = File.OpenRead(filePath);
         long offset = 0;
-        long? lastStaged = null;
+        var progress = new UploadProgress(file.Length);
         var throttled = 0;
         var buffer = new byte[UploadChunkBytes];
         while (true)
@@ -179,21 +179,13 @@ public sealed class PrismService
                 {
                     return;
                 }
-                offset = v?["offset"]?.GetValue<long>() ?? offset + read;
-                lastStaged = null;
+                if (status != "partial") throw new ServiceHttpException(0, "invalid upload status");
+                offset = progress.Advance(TryField(body, "offset"));
                 throttled = 0;
             }
             catch (ServiceHttpException e) when (e.Code == 409)
             {
-                // Resume where the server actually is; the same answer twice
-                // means we're not making progress, so give up.
-                var staged = TryField(e.Body, "offset") ?? 0;
-                if (lastStaged == staged)
-                {
-                    throw;
-                }
-                lastStaged = staged;
-                offset = staged;
+                offset = progress.Resume(TryField(e.Body, "offset"));
             }
             catch (ServiceHttpException e) when (e.Code == 429)
             {

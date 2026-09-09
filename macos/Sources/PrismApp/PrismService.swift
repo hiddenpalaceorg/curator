@@ -175,7 +175,7 @@ struct PrismService {
         let fh = try FileHandle(forReadingFrom: fileURL)
         defer { try? fh.close() }
         var offset: UInt64 = 0
-        var lastStaged: UInt64?
+        var progress = UploadProgress(size: try fh.seekToEnd())
         var throttled = 0
         while true {
             try fh.seek(toOffset: offset)
@@ -192,16 +192,12 @@ struct PrismService {
                 let data = try await perform(req)
                 let r = try JSONDecoder().decode(ChunkResult.self, from: data)
                 if r.status == "stored" || r.status == "exists" { return }
-                offset = r.offset ?? offset + UInt64(chunk.count)
-                lastStaged = nil
+                guard r.status == "partial" else { throw UploadProgress.Invalid.progress }
+                offset = try progress.advance(r.offset)
                 throttled = 0
             } catch let ServiceError.http(code, body) where code == 409 {
-                // Resume where the server actually is; the same answer twice
-                // means we're not making progress — give up.
-                let staged = (try? JSONDecoder().decode(ChunkResult.self, from: Data(body.utf8)))?.offset ?? 0
-                if lastStaged == staged { throw ServiceError.http(code, body) }
-                lastStaged = staged
-                offset = staged
+                let staged = (try? JSONDecoder().decode(ChunkResult.self, from: Data(body.utf8)))?.offset
+                offset = try progress.resume(staged)
             } catch let ServiceError.http(code, body) where code == 429 {
                 // Rate limited — wait out the window (the server's retryAfter
                 // when present) and retry the same offset.
