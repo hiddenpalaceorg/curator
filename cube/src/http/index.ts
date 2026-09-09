@@ -11,6 +11,7 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import { Readable } from "node:stream";
 import type { Pool } from "pg";
 import { defaultCan, type CubeAction, type CubeUser } from "../auth/native";
+import { CubeLoginRateLimitError } from "../auth/login-limit";
 import { diffRevisions } from "../diff";
 import { CubeConflictError, CubeValidationError, type Issue } from "../issues";
 import {
@@ -143,8 +144,14 @@ async function route(cube: Cube, req: Request): Promise<Response> {
     const adapter = cube.config.auth;
     if (!adapter?.login) return err("bad_request", 400, "login not supported by this site");
     const body = (await req.json().catch(() => null)) as { name?: string; password?: string } | null;
-    if (!body?.name || !body?.password) return err("bad_request", 400, "name and password required");
-    const result = await adapter.login({ name: body.name, password: body.password }, req);
+    if (typeof body?.name !== "string" || typeof body.password !== "string" || !body.name || !body.password) return err("bad_request", 400, "name and password required");
+    let result;
+    try {
+      result = await adapter.login({ name: body.name, password: body.password }, req);
+    } catch (e) {
+      if (!(e instanceof CubeLoginRateLimitError)) throw e;
+      return json({ error: { code: "rate_limited", message: e.message } }, 429, { "Retry-After": String(e.retryAfter) });
+    }
     if (!result) return err("unauthorized", 401, "invalid credentials");
     const headers = new Headers({ "content-type": "application/json" });
     for (const c of result.setCookies) headers.append("set-cookie", c);
