@@ -134,6 +134,7 @@ export type CubeLocalApi = {
         ns: string;
         slug: string;
         visibility: "public" | "moderator";
+        protection: Record<string, string>;
         deletedAt: Date | null;
       })
     | null
@@ -239,7 +240,7 @@ export function createCube(config: CubeConfig): Cube {
       const res = await pool().query(
         `SELECT r.id, r.page_id, r.parent_rev_id, r.author_name, r.comment, r.minor,
                 r.content, r.wikitext_fallback, r.created_at,
-                p.ns, p.slug, p.visibility, p.deleted_at
+                p.ns, p.slug, p.visibility, p.protection, p.deleted_at
            FROM cube_revision r JOIN cube_page p ON p.id = r.page_id
           WHERE r.id = $1`,
         [id],
@@ -250,6 +251,7 @@ export function createCube(config: CubeConfig): Cube {
             ns: string;
             slug: string;
             visibility: "public" | "moderator";
+            protection: Record<string, string>;
             deleted_at: Date | null;
           })
         | undefined;
@@ -260,6 +262,7 @@ export function createCube(config: CubeConfig): Cube {
         ns: r.ns,
         slug: r.slug,
         visibility: r.visibility,
+        protection: r.protection,
         deletedAt: r.deleted_at,
         parentRevId: r.parent_rev_id === null ? null : Number(r.parent_rev_id),
         author: r.author_name,

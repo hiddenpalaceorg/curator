@@ -9,6 +9,7 @@ export type DiffSidePage = {
   ns: string;
   slug: string;
   visibility: "public" | "moderator";
+  protection: Record<string, string>;
   deleted: boolean;
 };
 
@@ -24,7 +25,7 @@ export type RevisionDiff = {
 export async function diffRevisions(pool: Pool, fromId: number, toId: number): Promise<RevisionDiff | null> {
   const res = await pool.query(
     `SELECT r.id, r.page_id, r.author_name, r.content, r.created_at,
-            p.ns, p.slug, p.visibility, p.deleted_at
+            p.ns, p.slug, p.visibility, p.protection, p.deleted_at
        FROM cube_revision r JOIN cube_page p ON p.id = r.page_id
       WHERE r.id = ANY($1)`,
     [[fromId, toId]],
@@ -37,6 +38,7 @@ export async function diffRevisions(pool: Pool, fromId: number, toId: number): P
     ns: r.ns,
     slug: r.slug,
     visibility: r.visibility,
+    protection: r.protection,
     deleted: r.deleted_at !== null,
   });
   return {
