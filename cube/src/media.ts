@@ -20,7 +20,7 @@ const MEDIA_SLUG: SlugConfig = { namespacePrefixes: {}, capitalLinks: true };
 
 export class CubeMediaError extends Error {
   constructor(
-    readonly code: "invalid_name" | "too_large" | "referenced" | "not_found",
+    readonly code: "invalid_name" | "too_large" | "referenced" | "not_found" | "forbidden",
     readonly status: number,
     message: string,
   ) {
@@ -43,6 +43,8 @@ export type UploadMediaInput = {
   uploader: MediaActor;
   /** In-memory buffering cap (v1); default DEFAULT_MAX_UPLOAD_BYTES. */
   maxBytes?: number;
+  /** Remote callers must supply restoration authority; local imports remain trusted. */
+  authorizeRestore?: () => boolean | Promise<boolean>;
 };
 
 export type UploadMediaResult = {
@@ -140,16 +142,6 @@ export async function uploadMedia(
   const sha256 = createHash("sha256").update(buf).digest("hex");
   const key = storageKeyFor(sha256);
 
-  // Blob first, row second: an orphaned content-addressed blob is harmless,
-  // a row pointing at a missing blob is not.
-  if (!(await storage.has(key))) {
-    await storage.put(key, buf, {
-      contentType: input.contentType,
-      size: buf.length,
-      downloadName: name,
-    });
-  }
-
   return withTx(pool, async (client) => {
     const existing = await client.query(
       `SELECT id, storage_key, sha256, size, mime, uploaded_by, uploaded_at, deleted_at
@@ -157,6 +149,18 @@ export async function uploadMedia(
       [name],
     );
     const row = existing.rows[0];
+    if (row?.deleted_at != null && input.authorizeRestore && !(await input.authorizeRestore())) {
+      throw new CubeMediaError("forbidden", 403, "not allowed to restore media");
+    }
+    // Authorize the locked state before storing bytes; both restore paths
+    // below must keep a moderator's deletion intact when permission is denied.
+    if (!(await storage.has(key))) {
+      await storage.put(key, buf, {
+        contentType: input.contentType,
+        size: buf.length,
+        downloadName: name,
+      });
+    }
 
     if (row === undefined) {
       const ins = await client.query(
