@@ -7,6 +7,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import type { Pool } from "pg";
 import { hashPassword, needsRehash, verifyPassword } from "./passwords";
+import { loginAdmission } from "./login-limit";
 
 export type CubeUser = {
   id: number;
@@ -125,7 +126,9 @@ export function cubeNativeAuth(opts: NativeAuthOptions): CubeAuthAdapter {
     can: defaultCan,
 
     async login(creds) {
+      if (typeof creds.name !== "string" || typeof creds.password !== "string") return null;
       const name = canonicalUsername(creds.name);
+      loginAdmission.admit(sha256hex(name));
       const res = await pool().query(
         `SELECT id, name, roles, password_hash, blocked_at FROM cube_user WHERE name = $1`,
         [name],
