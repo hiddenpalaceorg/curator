@@ -130,7 +130,7 @@ impl LoaderObserver {
                 name.to_string()
             };
             let mut st = self.state.lock().unwrap();
-            st.batch = Some(label);
+            st.batch = Some(crate::out::terminal_text(&label).replace('\n', "\\n").replace('\t', "\\t"));
             st.done = None; // a finished bar never outlives its batch item
         } else if total > 1 {
             errln!("[{}/{}] {}", index + 1, total, name);
@@ -165,6 +165,7 @@ impl ProgressObserver for LoaderObserver {
             Event::CounterOpen { id, label, unit, total } => {
                 if self.tty {
                     let mut st = self.state.lock().unwrap();
+                    let label = crate::out::terminal_text(&label).replace('\n', "\\n").replace('\t', "\\t");
                     st.counters.push(Counter { id, label, unit, total, count: 0.0 });
                 }
             }
@@ -193,7 +194,7 @@ impl ProgressObserver for LoaderObserver {
             }
             Event::Message(m) => {
                 if self.tty {
-                    self.state.lock().unwrap().pending.push(m);
+                    self.state.lock().unwrap().pending.push(crate::out::terminal_text(&m));
                 } else {
                     errln!("{m}");
                 }
