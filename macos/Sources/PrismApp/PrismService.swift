@@ -172,6 +172,7 @@ struct PrismService {
     /// appends at `offset`, a 409 answers with the server's staged offset to
     /// resume from, and the final chunk returns `stored` (or `exists`).
     func uploadAsset(buildSha: String, assetSha: String, fileURL: URL) async throws {
+        let uploadToken = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
         let fh = try FileHandle(forReadingFrom: fileURL)
         defer { try? fh.close() }
         var offset: UInt64 = 0
@@ -187,6 +188,7 @@ struct PrismService {
             var req = URLRequest(url: assetChunkURL(buildSha: buildSha, assetSha: assetSha, offset: offset))
             req.httpMethod = "PUT"
             req.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+            req.setValue(uploadToken, forHTTPHeaderField: "X-Upload-Token")
             req.httpBody = chunk
             do {
                 let data = try await perform(req)

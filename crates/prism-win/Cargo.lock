@@ -901,6 +901,7 @@ dependencies = [
  "chrono",
  "directories",
  "fastcdc",
+ "getrandom 0.2.17",
  "hex",
  "md-5",
  "rusqlite",

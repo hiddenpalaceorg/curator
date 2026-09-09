@@ -15,6 +15,7 @@ pub mod render;
 pub mod schema;
 pub mod summary;
 pub mod tga;
+pub mod upload_token;
 
 use std::io::Write;
 use std::path::{Path, PathBuf};

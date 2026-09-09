@@ -9,7 +9,7 @@ import { createHash } from "node:crypto";
 import { build } from "esbuild";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
-import { assetBlobPath, assetStagingPath, inventoryAssetBytes, storeIdentity } from "../src/lib/blobstore";
+import { assetBlobPath, assetStagingPath, assetStagingStats, inventoryAssetBytes, storeIdentity } from "../src/lib/blobstore";
 import { initializeUploadQuota, withUploadQuota, reapUploadQuotaStaging } from "../src/lib/upload-quota";
 
 async function uploadRoute() {
@@ -114,6 +114,7 @@ test("durable quota includes old objects and serializes reservations", { skip: !
     // Actual route: a concurrent restart cannot truncate a streaming upload,
     // nor may opportunistic reaping remove its deliberately aged partial file.
     const route = await uploadRoute();
+    const token = '12'.repeat(16);
     const content = Buffer.from('abc');
     const sha = createHash('sha256').update(content).digest('hex');
     Object.assign(route.state,{pool,sha,size:content.length});
@@ -121,18 +122,18 @@ test("durable quota includes old objects and serializes reservations", { skip: !
     const body = new ReadableStream<Uint8Array>({start(c){controller=c;c.enqueue(content.subarray(0,1));}});
     const url = `https://example.test/api/submissions/${'ff'.repeat(32)}/assets/${sha}?offset=0`;
     const ctx = {params:Promise.resolve({sha256:'ff'.repeat(32),assetSha:sha})};
-    const uploading = route.PUT(new Request(url,{method:'PUT',body,duplex:'half'} as RequestInit),ctx);
+    const uploading = route.PUT(new Request(url,{method:'PUT',body,headers:{'x-upload-token':token},duplex:'half'} as RequestInit),ctx);
     try {
       let started = false;
       for(let i=0;i<100;i++) {
-        if(await stat(assetStagingPath(sha)).then(s=>s.size===1,()=>false)){started=true;break;}
+        if(await stat(assetStagingPath(sha,token)).then(s=>s.size===1,()=>false)){started=true;break;}
         await new Promise(r=>setTimeout(r,5));
       }
       assert.equal(started,true);
-      await utimes(assetStagingPath(sha),stale,stale);
+      await utimes(assetStagingPath(sha,token),stale,stale);
       const overlap = await route.PUT(new Request(url,{method:'PUT',body:'abc'}),ctx);
       assert.equal(overlap.status,429);
-      assert.equal((await readFile(assetStagingPath(sha))).toString(),'a');
+      assert.equal((await readFile(assetStagingPath(sha,token))).toString(),'a');
       controller.enqueue(content.subarray(1));controller.close();
       assert.equal((await uploading).status,201);
       assert.equal((await readFile(assetBlobPath(sha))).toString(),'abc');
@@ -170,5 +171,83 @@ test("durable quota includes old objects and serializes reservations", { skip: !
     await pool.end();
     await admin.query(`DROP DATABASE ${database}`);
     await admin.end();
+  }
+});
+
+test("private upload capabilities isolate restarts, offsets and retained-byte charges", {skip:!process.env.PGHOST}, async () => {
+  const database=`prism_upload_owners_${process.pid}_${Date.now()}`;
+  const admin=new pg.Pool({database:'postgres'});
+  await admin.query(`CREATE DATABASE ${database}`);
+  const pool=new pg.Pool({database});
+  const oldStore=process.env.ASSET_STORE_DIR;
+  process.env.ASSET_STORE_DIR=await mkdtemp(join(tmpdir(),'prism-owner-test-'));
+  try {
+    await pool.query('CREATE TABLE build_asset(sha256 text,size bigint)');
+    for(const migration of ['013-upload-quota.sql']) {
+      await pool.query(readFileSync(new URL(`../db/migrations/${migration}`,import.meta.url),'utf8'));
+    }
+    const legacy='77'.repeat(32);
+    await mkdir(dirname(assetStagingPath(legacy)),{recursive:true});
+    await writeFile(assetStagingPath(legacy),Buffer.alloc(20));
+    await pool.query('INSERT INTO build_asset VALUES($1,20)',[legacy]);
+    await initializeUploadQuota(pool,inventoryAssetBytes());
+    await pool.query('UPDATE upload_quota_config SET limit_bytes=20');
+    assert.equal((await withUploadQuota(pool,legacy,20,()=>assert.fail('legacy partial exemption'),'77'.repeat(16))).status,507);
+    const oldDate=new Date(Date.now()-48*3600_000);
+    await utimes(assetStagingPath(legacy),oldDate,oldDate);
+    await reapUploadQuotaStaging(pool);
+    await pool.query('UPDATE upload_quota_config SET limit_bytes=20');
+    const route=await uploadRoute();
+    const sha=createHash('sha256').update('abcdef').digest('hex');
+    const a='aa'.repeat(16), b='bb'.repeat(16);
+    Object.assign(route.state,{pool,sha,size:6});
+    const put=(token:string|null,offset:number,body:string)=>route.PUT(new Request(
+      `https://example.test/api/submissions/${'ff'.repeat(32)}/assets/${route.state.sha}?offset=${offset}`,
+      {method:'PUT',body,headers:token===null?{}:{'x-upload-token':token}}),
+      {params:Promise.resolve({sha256:'ff'.repeat(32),assetSha:route.state.sha})});
+    assert.equal((await put(a,0,'abc')).status,202);
+    const stolenOffset=await put(b,3,'def');
+    assert.equal(stolenOffset.status,409);
+    assert.equal((await stolenOffset.json()).offset,0);
+    assert.equal((await readFile(assetStagingPath(sha,a))).toString(),'abc');
+    await pool.query('UPDATE upload_quota_config SET limit_bytes=7');
+    assert.equal((await put(b,0,'xy')).status,507); // second copy must reserve additional room
+    await pool.query('UPDATE upload_quota_config SET limit_bytes=20');
+    assert.equal((await put(b,0,'xy')).status,202);
+    assert.equal((await put(a,0,'ab')).status,202);
+    assert.equal((await readFile(assetStagingPath(sha,b))).toString(),'xy');
+    assert.deepEqual(await assetStagingStats(sha),{bytes:4,count:2});
+    assert.equal((await put(a,2,'cdef')).status,201);
+    assert.equal((await readFile(assetBlobPath(sha))).toString(),'abcdef');
+    assert.deepEqual((await pool.query('SELECT bytes::text,stored_bytes::text FROM upload_quota WHERE sha256=$1',[sha])).rows[0],{bytes:'8',stored_bytes:'6'});
+    await pool.query('INSERT INTO build_asset VALUES($1,6)',[sha]);
+    await pool.query('UPDATE upload_quota_config SET limit_bytes=5');
+    assert.equal((await withUploadQuota(pool,'cc'.repeat(32),4,()=>assert.fail('private copy must stay charged'),'cc'.repeat(16))).status,507);
+    // Cleanup uses the digest lease and accounts the retained copy separately.
+    const stale=new Date(Date.now()-48*3600_000);
+    await utimes(assetStagingPath(sha,b),stale,stale);
+    await reapUploadQuotaStaging(pool);
+    assert.deepEqual(await assetStagingStats(sha),{bytes:0,count:0});
+
+    // Unupgraded callers retain safe one-shot uploads, never shared resumes.
+    route.state.sha=createHash('sha256').update('ghijkl').digest('hex');
+    await pool.query('UPDATE upload_quota_config SET limit_bytes=100');
+    assert.equal((await put(null,0,'gh')).status,400);
+    assert.equal((await put(null,2,'ijkl')).status,400);
+    assert.equal((await put('../bad',0,'ghijkl')).status,400);
+    assert.equal((await put(a,0,'')).status,400);
+    assert.deepEqual(await assetStagingStats(route.state.sha),{bytes:0,count:0});
+    assert.equal((await put(null,0,'ghijkl')).status,201);
+
+    // Empty/invalid attempts cannot accumulate unlimited capability files.
+    route.state.sha=createHash('sha256').update('mnopqr').digest('hex');
+    for(let i=0;i<32;i++) await writeFile(assetStagingPath(route.state.sha,i.toString(16).padStart(32,'0')),'m');
+    await pool.query('INSERT INTO upload_quota(sha256,bytes,stored_bytes) VALUES($1,32,0)',[route.state.sha]);
+    assert.equal((await put(a,0,'m')).status,429);
+    assert.equal((await put('0'.repeat(32),1,'n')).status,202); // existing owner still progresses
+    assert.equal((await readFile(assetStagingPath(route.state.sha,'0'.repeat(32)))).toString(),'mn');
+  } finally {
+    if(oldStore===undefined) delete process.env.ASSET_STORE_DIR;else process.env.ASSET_STORE_DIR=oldStore;
+    await pool.end();await admin.query(`DROP DATABASE ${database}`);await admin.end();
   }
 });
