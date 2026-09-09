@@ -22,10 +22,28 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  authorize:
+    name: check deployment ref
+    if: github.repository == 'hiddenpalaceorg/prism'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      allowed: ${{ steps.ref.outputs.allowed }}
+    steps:
+      - id: ref
+        env:
+          DEPLOY_REF: ${{ github.ref }}
+        run: |
+          test "$DEPLOY_REF" = refs/heads/main
+          echo 'allowed=true' >> "$GITHUB_OUTPUT"
+
   deploy:
     name: build, swap, verify
-    # Forks have no such runner, and a queued job there would hang forever.
-    if: github.repository == 'hiddenpalaceorg/prism'
+    # Check before scheduling the production runner, including manual runs.
+    # Actions string comparisons ignore case; the hosted check above does not.
+    needs: authorize
+    if: needs.authorize.outputs.allowed == 'true'
     runs-on: [self-hosted, hpwiki]
     timeout-minutes: 30
     env:
