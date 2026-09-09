@@ -17,7 +17,7 @@ jobs:
     name: compile Prism.icon with actool
     runs-on: macos-26
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           sparse-checkout: macos/icon
       - name: actool compile + verify
@@ -33,7 +33,7 @@ jobs:
             --minimum-deployment-target 26.0 \
             --output-partial-info-plist out/partial.plist
           xcrun assetutil --info out/Assets.car
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: prism-assets-car
           path: out/Assets.car

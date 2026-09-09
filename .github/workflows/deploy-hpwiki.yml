@@ -33,7 +33,7 @@ jobs:
       PORT: "6800"
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       # The box's Node is what serves the app, so build with it rather than a
       # runner-managed toolchain: same binary, same native modules.
