@@ -415,7 +415,7 @@ impl Analyzer {
         let mut missing = 0u64;
         for sha in &asset_shas {
             let blob = store.join(&sha[..2]).join(sha);
-            let bytes = match std::fs::read(&blob) {
+            let mut file = match std::fs::File::open(&blob) {
                 Ok(b) => b,
                 Err(_) => {
                     missing += 1;
@@ -423,7 +423,10 @@ impl Analyzer {
                 }
             };
             zip.start_file(format!("assets/{sha}"), opts).map_err(zip_err)?;
-            zip.write_all(&bytes)?;
+            if !copy_bundle_asset(&mut file, &mut zip)? {
+                missing += 1;
+                continue;
+            }
             shipped += 1;
         }
         if missing > 0 {
@@ -1143,6 +1146,109 @@ mod cache_hit_tests {
         assert_eq!(reloaded.image.name, "Build Name");
 
         let _ = std::fs::remove_dir_all(&base);
+    }
+}
+
+/// Skip unreadable source blobs as before, but never hide archive write errors.
+fn copy_bundle_asset<R: std::io::Read, W: Write + std::io::Seek>(
+    source: &mut R,
+    archive: &mut zip::ZipWriter<W>,
+) -> Result<bool> {
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let n = match source.read(&mut buffer) {
+            Ok(0) => return Ok(true),
+            Ok(n) => n,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => {
+                archive.abort_file().map_err(|e| Error::Other(format!("zip: {e}")))?;
+                return Ok(false);
+            }
+        };
+        archive.write_all(&buffer[..n])?;
+    }
+}
+
+#[cfg(test)]
+mod bundle_tests {
+    use super::*;
+    use std::io::Read;
+    use sha2::{Digest, Sha256};
+
+    #[test]
+    fn asset_copy_uses_bounded_reads_and_discards_failed_entries() {
+        struct Source { remaining: usize, fail: bool }
+        impl Read for Source {
+            fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+                assert!(buffer.len() <= 64 * 1024);
+                if self.remaining == 0 {
+                    return if self.fail { Err(std::io::Error::other("unreadable")) } else { Ok(0) };
+                }
+                let n = buffer.len().min(self.remaining);
+                buffer[..n].fill(123);
+                self.remaining -= n;
+                Ok(n)
+            }
+        }
+        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let opts = zip::write::SimpleFileOptions::default();
+        zip.start_file("failed", opts).unwrap();
+        assert!(!copy_bundle_asset(&mut Source { remaining: 256 * 1024, fail: true }, &mut zip).unwrap());
+        zip.start_file("complete", opts).unwrap();
+        assert!(copy_bundle_asset(&mut Source { remaining: 1024 * 1024, fail: false }, &mut zip).unwrap());
+        let mut archive = zip::ZipArchive::new(zip.finish().unwrap()).unwrap();
+        assert_eq!(archive.len(), 1);
+        assert_eq!(archive.by_name("complete").unwrap().size(), 1024 * 1024);
+        assert!(archive.by_name("failed").is_err());
+    }
+
+    #[test]
+    fn bundle_streams_assets_and_preserves_manifest() {
+        let root = std::env::temp_dir().join(format!("prism-bundle-{}-{}", std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let analyzer = Analyzer::new(Config {
+            adapter: AdapterCommand::bin("unused"), data_dir: Some(root.clone()),
+        }).unwrap();
+        let sha = "a".repeat(64);
+        let missing = "b".repeat(64);
+        let mut record = BuildRecord {
+            record_schema_version: RECORD_SCHEMA_VERSION, fingerprint_profile: FINGERPRINT_PROFILE.into(),
+            image: ImageInfo { sha256: "c".repeat(64), name: "sample".into(), size: 1, md5: String::new(), sha1: String::new() },
+            info: DiscInfo::default(), composites: Composites::default(), structural: Structural::default(),
+            text_doc: String::new(), contents: vec![], media: vec![], exe_fp: None,
+            chunk_signature: None, resemblance: None, assets: Some(vec![]), asset_profile: ASSET_PROFILE,
+        };
+        for hash in [&sha, &sha, &missing] {
+            record.assets.as_mut().unwrap().push(AssetRef {
+                path: hash.clone(), sha256: hash.clone(), size: 8 * 1024 * 1024,
+                mime: "video/mp4".into(), kind: "video".into(),
+            });
+        }
+        let cached = analyzer.cache.store(&record, "").unwrap();
+        analyzer.db.upsert_build(&record, &cached.to_string_lossy()).unwrap();
+        let blob = analyzer.assets_dir().join("aa").join(&sha);
+        std::fs::create_dir_all(blob.parent().unwrap()).unwrap();
+        let mut input = std::fs::File::create(&blob).unwrap();
+        let block = [123u8; 4096];
+        for _ in 0..2048 { input.write_all(&block).unwrap(); }
+        drop(input);
+        let bundle = root.join("bundle.zip");
+        assert_eq!(analyzer.export_bundle(&bundle).unwrap(), 1);
+        let mut archive = zip::ZipArchive::new(std::fs::File::open(&bundle).unwrap()).unwrap();
+        assert_eq!(archive.len(), 3);
+        let mut bytes = Vec::new();
+        archive.by_name(&format!("assets/{sha}")).unwrap().read_to_end(&mut bytes).unwrap();
+        assert_eq!(bytes.len(), 8 * 1024 * 1024);
+        assert!(bytes.iter().all(|b| *b == 123));
+        let mut body = Vec::new();
+        archive.by_name("builds.jsonl").unwrap().read_to_end(&mut body).unwrap();
+        let manifest: serde_json::Value = serde_json::from_reader(archive.by_name("manifest.json").unwrap()).unwrap();
+        assert_eq!(manifest["count"], 1);
+        assert_eq!(manifest["assets_count"], 1);
+        assert_eq!(manifest["body_sha256"], hex::encode(Sha256::digest(&body)));
+        drop(archive);
+        drop(analyzer);
+        std::fs::remove_dir_all(root).unwrap();
     }
 }
 
