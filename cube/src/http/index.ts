@@ -32,6 +32,7 @@ import {
 } from "../moderation";
 import { CubeQueryError, type ObjectQuery } from "../query";
 import type { Cube } from "../index";
+import { canReadResolution } from "../resolve";
 
 type Method = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 export type CubeHandlers = Record<Method, (req: Request) => Promise<Response>>;
@@ -173,6 +174,9 @@ async function route(cube: Cube, req: Request): Promise<Response> {
     if (method === "GET") {
       const follow = url.searchParams.get("redirect") !== "no";
       const resolved = follow ? await cube.api.resolve(title) : null;
+      if (resolved && !(await canReadResolution(cube, resolved, (page) => can("read", page)))) {
+        return err("not_found", 404, "no such page");
+      }
       const target = resolved ?? { ns: ref.ns, slug: ref.slug };
       const revId = url.searchParams.get("rev");
       const page = await cube.api.getPage(target, revId ? { revId: Number(revId) } : {});
@@ -269,7 +273,8 @@ async function route(cube: Cube, req: Request): Promise<Response> {
     const title = url.searchParams.get("title");
     if (!title) return err("bad_request", 400, "title required");
     const resolved = await cube.api.resolve(title);
-    return resolved ? json(resolved) : err("not_found", 404, "no such page");
+    return resolved && await canReadResolution(cube, resolved, (page) => can("read", page))
+      ? json(resolved) : err("not_found", 404, "no such page");
   }
 
   if (path === "/revisions" && method === "GET") {
