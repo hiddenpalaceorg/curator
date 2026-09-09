@@ -2,8 +2,9 @@ import type { Pool } from "pg";
 import fsp from "node:fs/promises";
 import { assetBlobPath, assetStagingPath, blobSize, reapStaleAssetStaging, s3Enabled, storeIdentity } from "./blobstore";
 
-const totalSql = `SELECT COALESCE(sum(q.bytes), 0)::text AS bytes FROM upload_quota q
-  WHERE NOT EXISTS (SELECT 1 FROM build_asset a WHERE a.sha256=q.sha256 AND a.size=q.bytes)`;
+const totalSql = `SELECT COALESCE(sum(q.bytes - CASE WHEN EXISTS
+  (SELECT 1 FROM build_asset a WHERE a.sha256=q.sha256 AND a.size=q.stored_bytes)
+  THEN q.stored_bytes ELSE 0 END),0)::text AS bytes FROM upload_quota q`;
 
 async function sizeOnDisk(file: string): Promise<number> {
   try { return (await fsp.stat(file)).size; }
@@ -34,9 +35,7 @@ export async function withUploadQuota(pool: Pool, sha: string, claimed: number, 
       // uses a same-filesystem rename. Reserve the peak before reading input.
       const peak = BigInt(claimed) * (s3Enabled() ? 2n : 1n);
       const wanted = peak > old ? peak : old;
-      const oldApproved = old > 0n && (await c.query("SELECT 1 FROM build_asset WHERE sha256=$1 AND size=$2 LIMIT 1", [sha, old.toString()])).rowCount;
-      const wantedApproved = (await c.query("SELECT 1 FROM build_asset WHERE sha256=$1 AND size=$2 LIMIT 1", [sha, wanted.toString()])).rowCount;
-      const nextTotal = total - (oldApproved ? 0n : old) + (wantedApproved ? 0n : wanted);
+      const nextTotal = total + wanted - old;
       if (nextTotal > BigInt(config.rows[0].limit_bytes)) {
         await c.query("ROLLBACK");
         return Response.json({ error: "pending upload quota exceeded" }, { status: 507 });
@@ -70,7 +69,7 @@ async function reconcileLease(pool: Pool, sha: string): Promise<void> {
     const row = await c.query("SELECT active FROM upload_quota WHERE sha256=$1 FOR UPDATE", [sha]);
     if (row.rows[0]?.active !== 1) throw new Error("upload lease lost");
     if (actual === 0) await c.query("DELETE FROM upload_quota WHERE sha256=$1", [sha]);
-    else await c.query("UPDATE upload_quota SET bytes=$2,active=0,updated_at=now() WHERE sha256=$1", [sha, actual]);
+    else await c.query("UPDATE upload_quota SET bytes=$2,stored_bytes=$3,active=0,updated_at=now() WHERE sha256=$1", [sha, actual, stored]);
     await c.query("COMMIT");
   } catch (e) { await c.query("ROLLBACK"); throw e; }
   finally { c.release(); }
@@ -101,7 +100,7 @@ export async function reapUploadQuotaStaging(pool: Pool): Promise<void> {
 
 /** One-time inventory, while all old upload workers/import jobs are stopped.
  * Rollback leaves uploads disabled; no blob or staging file is ever deleted. */
-export async function initializeUploadQuota(pool: Pool, inventory: AsyncIterable<{ sha256: string; size: number }>): Promise<void> {
+export async function initializeUploadQuota(pool: Pool, inventory: AsyncIterable<{ sha256: string; size: number; staged?: boolean }>): Promise<void> {
   const c = await pool.connect();
   try {
     await c.query("BEGIN");
@@ -109,8 +108,9 @@ export async function initializeUploadQuota(pool: Pool, inventory: AsyncIterable
     if (config.rows[0]?.initialized) throw new Error("quota already initialized");
     for await (const item of inventory) {
       if (!/^[0-9a-f]{64}$/.test(item.sha256) || !Number.isSafeInteger(item.size) || item.size < 0) throw new Error("invalid inventory entry");
-      await c.query(`INSERT INTO upload_quota(sha256,bytes) VALUES ($1,$2)
-        ON CONFLICT (sha256) DO UPDATE SET bytes=upload_quota.bytes+excluded.bytes`, [item.sha256, item.size]);
+      await c.query(`INSERT INTO upload_quota(sha256,bytes,stored_bytes) VALUES ($1,$2,$3)
+        ON CONFLICT (sha256) DO UPDATE SET bytes=upload_quota.bytes+excluded.bytes,
+          stored_bytes=upload_quota.stored_bytes+excluded.stored_bytes`, [item.sha256, item.size, item.staged ? 0 : item.size]);
     }
     await c.query("UPDATE upload_quota_config SET initialized=true,store_identity=$1 WHERE id=true", [storeIdentity()]);
     await c.query("COMMIT");

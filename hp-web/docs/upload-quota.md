@@ -1,7 +1,9 @@
 # Pending upload quota
 
 The default limit is 10 TB (10,000,000,000,000 bytes). Assets referenced by the
-approved library do not count. Reservations are shared across processes and
+approved library do not count once stored as verified final objects. Partial
+bytes are never exempt merely because a record names the same hash and size.
+Reservations are shared across processes and
 held before accepting bytes; crashes retain their charge and exclusive digest
 lease. Concurrent requests for one digest return retryable 429 while unrelated
 uploads can proceed. Stale-file cleanup uses the same lease and runs even when

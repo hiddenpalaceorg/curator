@@ -140,7 +140,7 @@ export function storeIdentity(): string {
 }
 
 /** Actual asset objects and partial assets; excludes separate media namespaces. */
-export async function* inventoryAssetBytes(): AsyncGenerator<{ sha256: string; size: number }> {
+export async function* inventoryAssetBytes(): AsyncGenerator<{ sha256: string; size: number; staged?: boolean }> {
   if (s3Enabled()) {
     let token: string | undefined;
     do {
@@ -175,7 +175,7 @@ export async function* inventoryAssetBytes(): AsyncGenerator<{ sha256: string; s
   catch (e) { if ((e as NodeJS.ErrnoException).code === "ENOENT") return; throw e; }
   for await (const entry of staging) {
     if (!/^[0-9a-f]{64}\.part$/.test(entry.name)) continue;
-    yield { sha256: entry.name.slice(0, 64), size: (await fsp.stat(path.join(assetStoreDir(), ".staging", entry.name))).size };
+    yield { sha256: entry.name.slice(0, 64), size: (await fsp.stat(path.join(assetStoreDir(), ".staging", entry.name))).size, staged: true };
   }
 }
 
