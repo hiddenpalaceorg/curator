@@ -24,6 +24,18 @@ test("validateBuildRecord accepts a minimal valid record", () => {
   assert.equal(r.ok, true);
 });
 
+test("structural counts reject malformed values without requiring legacy optional fields", () => {
+  for (const count of ["1", {}, [], -1, 1.5, Number.MAX_SAFE_INTEGER + 1, Infinity]) {
+    assert.equal(validateBuildRecord({ image: { sha256: SHA }, structural: { file_count: count } }).ok, false);
+  }
+  for (const structural of ["bad", [], 1, true]) {
+    assert.equal(validateBuildRecord({ image: { sha256: SHA }, structural }).ok, false);
+  }
+  for (const structural of [undefined, null, {}, { file_count: null }, { file_count: 0 }, { file_count: 200_000 }]) {
+    assert.equal(validateBuildRecord({ image: { sha256: SHA }, structural }).ok, true);
+  }
+});
+
 test("validateBuildRecord walks the contents tree and type-checks arrays", () => {
   const ok = validateBuildRecord({
     image: { sha256: SHA },
