@@ -381,14 +381,23 @@ async function route(cube: Cube, req: Request): Promise<Response> {
     const media = await getMedia(cube.pool(), name);
     if (!media) return err("not_found", 404, "no such media");
     const publicUrl = storage.publicUrl(media.storageKey);
-    if (publicUrl) return new Response(null, { status: 302, headers: { location: publicUrl } });
+    // Direct serving is safe only on an isolated origin. A stored MIME can
+    // differ from the metadata of a deduplicated blob at the public gateway.
+    if (publicUrl && new URL(publicUrl, url).origin !== url.origin) {
+      return new Response(null, { status: 302, headers: { location: publicUrl } });
+    }
     const blob = await storage.get(media.storageKey);
     if (!blob) return err("not_found", 404, "media blob missing from storage");
     const contentType = media.mime ?? blob.contentType ?? "application/octet-stream";
-    const headers: Record<string, string> = { "content-type": contentType };
+    const headers: Record<string, string> = {
+      "content-type": contentType,
+      "x-content-type-options": "nosniff",
+      "content-security-policy": "sandbox; default-src 'none'; media-src 'self'",
+    };
     const size = media.size ?? blob.size;
     if (size != null) headers["content-length"] = String(size);
-    if (!/^(image|video|audio)\//.test(contentType)) {
+    const mime = contentType.split(";", 1)[0]!.trim().toLowerCase();
+    if (!/^(?:image\/(?:png|jpeg|gif|webp|avif|bmp)|audio\/(?:mpeg|ogg|wav|webm|flac|mp4)|video\/(?:mp4|webm|ogg))$/.test(mime)) {
       headers["content-disposition"] = `attachment; filename*=UTF-8''${encodeURIComponent(media.name)}`;
     }
     return new Response(Readable.toWeb(blob.body) as unknown as ReadableStream, { status: 200, headers });

@@ -95,6 +95,23 @@ function sha256hex(b: Uint8Array): string {
 const PNG_V1 = Buffer.from("fake png bytes, version one");
 const PNG_V2 = Buffer.from("fake png bytes, version two, different content");
 
+skippable("active media is sandboxed and never redirected to a public gateway", async () => {
+  const { uploadMedia } = await import("../src/media");
+  const storage = localDirStorage({ dir, publicBase: `${API}/static` });
+  const gateway = createCube({ db: { pool }, components: testComponents, storage });
+  for (const mime of ["image/svg+xml", "Image/SVG+XML; charset=utf-8", "text/html", "application/xhtml+xml"]) {
+    const name = `active-${encodeURIComponent(mime)}.svg`;
+    const bytes = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>');
+    await uploadMedia(pool, storage, { name, body: bytes, contentType: mime, uploader: { name: "test" } });
+    const res = await gateway.handlers.GET(req("GET", `/media/file?name=${encodeURIComponent(name)}`));
+    assert.equal(res.status, 200);
+    assert.match(res.headers.get("content-disposition") ?? "", /^attachment;/);
+    assert.equal(res.headers.get("x-content-type-options"), "nosniff");
+    assert.match(res.headers.get("content-security-policy") ?? "", /sandbox/);
+    assert.deepEqual(Buffer.from(await res.arrayBuffer()), bytes);
+  }
+});
+
 let uploaderCookie = "";
 let modCookie = "";
 let vandalCookie = "";
