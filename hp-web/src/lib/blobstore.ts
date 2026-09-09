@@ -63,24 +63,37 @@ const ASSET_STAGING_TTL_MS = 24 * 3600_000;
 
 /** Remove asset staging files past the TTL. Best-effort and opportunistic —
  *  the asset upload route calls it before staging a fresh chunk. */
-export async function reapStaleAssetStaging(): Promise<void> {
+export async function reapStaleAssetStaging(
+  guard?: (sha: string, reap: () => Promise<void>) => Promise<void>
+): Promise<string[]> {
+  const reaped: string[] = [];
   const dir = path.join(assetStoreDir(), ".staging");
   const cutoff = Date.now() - ASSET_STAGING_TTL_MS;
   let names: string[];
   try {
     names = await fsp.readdir(dir);
   } catch {
-    return;
+    return reaped;
   }
   for (const name of names) {
-    if (!name.endsWith(".part") || name.startsWith("media-")) continue;
+    if (!/^[0-9a-f]{64}\.part$/.test(name)) continue;
     const p = path.join(dir, name);
     try {
-      if ((await fsp.stat(p)).mtimeMs < cutoff) await fsp.rm(p, { force: true });
+      if ((await fsp.stat(p)).mtimeMs >= cutoff) continue;
+      const reap = async () => {
+        // Recheck after acquiring the upload's lease, not before it.
+        if ((await fsp.stat(p)).mtimeMs < cutoff) {
+          await fsp.rm(p, { force: true });
+          reaped.push(name.slice(0, 64));
+        }
+      };
+      if (guard) await guard(name.slice(0, 64), reap);
+      else await reap();
     } catch {
       // Raced with another reaper or an active finalize; leave it.
     }
   }
+  return reaped;
 }
 
 /** Free space the store filesystem must keep in reserve: staging writes refuse
@@ -118,6 +131,52 @@ export function s3Enabled(): boolean {
 export function storeDescription(): string {
   if (!s3Enabled()) return assetStoreDir();
   return `${process.env.ASSET_S3_ENDPOINT}/${s3Bucket()}/${s3Prefix()}`;
+}
+
+export function storeIdentity(): string {
+  return JSON.stringify(s3Enabled()
+    ? [process.env.ASSET_S3_ENDPOINT, s3Bucket(), s3Prefix(), path.resolve(assetStoreDir())]
+    : ["local", path.resolve(assetStoreDir())]);
+}
+
+/** Actual asset objects and partial assets; excludes separate media namespaces. */
+export async function* inventoryAssetBytes(): AsyncGenerator<{ sha256: string; size: number; staged?: boolean }> {
+  if (s3Enabled()) {
+    let token: string | undefined;
+    do {
+      const page = await s3().send(new ListObjectsV2Command({ Bucket: s3Bucket(), Prefix: s3Prefix(), ContinuationToken: token }));
+      for (const object of page.Contents ?? []) {
+        const key = object.Key?.slice(s3Prefix().length) ?? "";
+        if (/^[0-9a-f]{2}\/[0-9a-f]{64}$/.test(key) && key.slice(0, 2) === key.slice(3, 5)) {
+          if (object.Size === undefined) throw new Error("missing object size");
+          yield { sha256: key.slice(3), size: object.Size };
+        }
+      }
+      if (page.IsTruncated && !page.NextContinuationToken) throw new Error("incomplete object listing");
+      token = page.IsTruncated ? page.NextContinuationToken : undefined;
+    } while (token);
+  } else {
+    for (let i = 0; i < 256; i++) {
+      const shard = i.toString(16).padStart(2, "0");
+      let dir;
+      try { dir = await fsp.opendir(path.join(assetStoreDir(), shard)); }
+      catch (e) { if ((e as NodeJS.ErrnoException).code === "ENOENT") continue; throw e; }
+      for await (const entry of dir) {
+        if (/^[0-9a-f]{64}$/.test(entry.name) && entry.name.startsWith(shard)) {
+          const stat = await fsp.stat(path.join(assetStoreDir(), shard, entry.name));
+          if (!stat.isFile()) throw new Error("invalid asset object");
+          yield { sha256: entry.name, size: stat.size };
+        }
+      }
+    }
+  }
+  let staging;
+  try { staging = await fsp.opendir(path.join(assetStoreDir(), ".staging")); }
+  catch (e) { if ((e as NodeJS.ErrnoException).code === "ENOENT") return; throw e; }
+  for await (const entry of staging) {
+    if (!/^[0-9a-f]{64}\.part$/.test(entry.name)) continue;
+    yield { sha256: entry.name.slice(0, 64), size: (await fsp.stat(path.join(assetStoreDir(), ".staging", entry.name))).size, staged: true };
+  }
 }
 
 function s3Bucket(): string {
