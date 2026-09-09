@@ -10,6 +10,7 @@ pub mod cache;
 pub mod db;
 pub mod error;
 pub mod fingerprint;
+pub mod upload;
 pub mod progress;
 pub mod render;
 pub mod schema;

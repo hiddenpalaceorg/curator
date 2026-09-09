@@ -2036,14 +2036,15 @@ mod app {
     /// a 409 answers with the server's staged offset to resume from, and the
     /// final chunk returns `stored` (or `exists`).
     unsafe fn upload_asset_chunked(assets_url: &str, sha: &str, path: &std::path::Path) -> bool {
-        let Ok(bytes) = std::fs::read(path) else { return false };
+        let Ok(mut source) = prism_core::upload::UploadSource::open(path) else { return false };
+        let Ok(size) = usize::try_from(source.len()) else { return false };
         let mut offset: usize = 0;
         let mut last_staged: Option<usize> = None;
         let mut throttled = 0u32;
-        while offset < bytes.len() {
-            let end = (offset + UPLOAD_CHUNK).min(bytes.len());
+        while offset < size {
+            let Ok(chunk) = source.chunk(offset as u64) else { return false };
+            let end = offset + chunk.len();
             let url = format!("{assets_url}/{sha}?offset={offset}");
-            let chunk = &bytes[offset..end];
             match http_request("PUT", &url, Some("Content-Type: application/octet-stream"), chunk) {
                 Ok((code, body)) if (200..300).contains(&code) => {
                     let v = serde_json::from_str::<serde_json::Value>(&body).unwrap_or_default();
