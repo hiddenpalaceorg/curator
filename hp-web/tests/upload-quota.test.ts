@@ -154,6 +154,18 @@ test("durable quota includes old objects and serializes reservations", { skip: !
       if(endpoint===undefined) delete process.env.ASSET_S3_ENDPOINT; else process.env.ASSET_S3_ENDPOINT=endpoint;
       await pool.query('UPDATE upload_quota_config SET store_identity=$1',[storeIdentity()]);
     }
+
+    // A full-sized unverified partial is not an approved final object. A
+    // stream can fail after its last data chunk but before hashing begins.
+    const interrupted='99'.repeat(32);
+    await pool.query('INSERT INTO build_asset VALUES($1,20)',[interrupted]);
+    await pool.query('UPDATE upload_quota_config SET limit_bytes=29');
+    await assert.rejects(withUploadQuota(pool,interrupted,20,async()=>{
+      await writeFile(assetStagingPath(interrupted),Buffer.alloc(20));
+      throw new Error('interrupted before hash');
+    }),/interrupted before hash/);
+    assert.deepEqual((await pool.query('SELECT bytes::text,stored_bytes::text FROM upload_quota WHERE sha256=$1',[interrupted])).rows[0],{bytes:'20',stored_bytes:'0'});
+    assert.equal((await withUploadQuota(pool,'88'.repeat(32),1,()=>assert.fail('unverified staging must stay charged'))).status,507);
   } finally {
     if (oldStore === undefined) delete process.env.ASSET_STORE_DIR; else process.env.ASSET_STORE_DIR = oldStore;
     await pool.end();
