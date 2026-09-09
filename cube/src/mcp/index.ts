@@ -10,7 +10,7 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import type { CubeUser } from "../auth/native";
+import { defaultCan, type CubeUser, type PagePolicyInput } from "../auth/native";
 import { CubeConflictError, CubeValidationError } from "../issues";
 import { CubeQueryError } from "../query";
 import type { Cube } from "../index";
@@ -30,6 +30,12 @@ export function createCubeMcpServer(cube: Cube, opts: McpOptions = {}): McpServe
   const server = new McpServer({ name: "cube", version: "0.1.0" });
   const allowWrites = opts.allowWrites ?? opts.user != null;
   const author = opts.user ? { id: opts.user.id, name: opts.user.name } : { id: null, name: "mcp-agent" };
+  const canRead = async (page: PagePolicyInput, deleted = false) => {
+    const user = opts.user ?? null;
+    const can = (action: "read" | "delete") => cube.config.auth?.can
+      ? cube.config.auth.can(user, action, page) : defaultCan(user, action, page);
+    return await can("read") && (!deleted || await can("delete"));
+  };
 
   server.registerTool(
     "search_pages",
@@ -54,8 +60,12 @@ export function createCubeMcpServer(cube: Cube, opts: McpOptions = {}): McpServe
     async ({ title, revision }) => {
       const resolved = await cube.api.resolve(title);
       if (!resolved) return text({ error: "no such page" });
+      if (resolved.redirectedFrom) {
+        const source = await cube.api.getPage(resolved.redirectedFrom);
+        if (!source || !(await canRead(source))) return text({ error: "no such page" });
+      }
       const page = await cube.api.getPage(resolved, revision ? { revId: revision } : {});
-      if (!page) return text({ error: "no such page" });
+      if (!page || !(await canRead(page))) return text({ error: "no such page" });
       return text({
         ns: page.ns,
         slug: page.slug,
@@ -77,14 +87,21 @@ export function createCubeMcpServer(cube: Cube, opts: McpOptions = {}): McpServe
     async ({ title, limit, before }) => {
       const resolved = await cube.api.resolve(title);
       if (!resolved) return text({ error: "no such page" });
-      return text(await cube.api.listRevisions(resolved.redirectedFrom ?? resolved, { limit, before }));
+      const ref = resolved.redirectedFrom ?? resolved;
+      const page = await cube.api.getPage(ref);
+      if (!page || !(await canRead(page))) return text({ error: "no such page" });
+      return text(await cube.api.listRevisions(ref, { limit, before }));
     },
   );
 
   server.registerTool(
     "get_revision",
     { description: "Fetch one revision's markdown + metadata.", inputSchema: { id: z.number().int() } },
-    async ({ id }) => text((await cube.api.getRevision(id)) ?? { error: "no such revision" }),
+    async ({ id }) => {
+      const revision = await cube.api.getRevision(id);
+      return text(revision && await canRead(revision, revision.deletedAt !== null)
+        ? revision : { error: "no such revision" });
+    },
   );
 
   server.registerTool(
@@ -95,7 +112,12 @@ export function createCubeMcpServer(cube: Cube, opts: McpOptions = {}): McpServe
     },
     async ({ from, to }) => {
       const { diffRevisions } = await import("../diff");
-      return text((await diffRevisions(cube.pool(), from, to)) ?? { error: "no such revisions" });
+      const diff = await diffRevisions(cube.pool(), from, to);
+      if (!diff) return text({ error: "no such revisions" });
+      for (const page of [diff.pages.from, diff.pages.to]) {
+        if (!(await canRead(page, page.deleted))) return text({ error: "no such revisions" });
+      }
+      return text(diff);
     },
   );
 
