@@ -79,6 +79,22 @@ struct SimilarityResponse: Decodable {
 /// Read-only client for the Prism web service. Base URL from `PRISM_WEB_URL`
 /// (default `https://hiddenpalace.org`; point it at a local dev server to test).
 struct PrismService {
+    private static let boundedSession: URLSession = {
+        let configuration = URLSessionConfiguration.default
+        configuration.timeoutIntervalForRequest = 120
+        configuration.timeoutIntervalForResource = 120
+        return URLSession(configuration: configuration)
+    }()
+    static let maxResponseBytes = 8 * 1024 * 1024
+
+    static func boundedData<S: AsyncSequence>(_ bytes: S, limit: Int = maxResponseBytes) async throws -> Data where S.Element == UInt8 {
+        var data = Data()
+        for try await byte in bytes {
+            guard data.count < limit else { throw ServiceError.transport("service", "response exceeds the size limit") }
+            data.append(byte)
+        }
+        return data
+    }
     /// The production default, built once without a force-unwrap.
     static let defaultBaseURL: URL = {
         var c = URLComponents()
@@ -233,7 +249,13 @@ struct PrismService {
     private func perform(_ req: URLRequest) async throws -> Data {
         let (data, response): (Data, URLResponse)
         do {
-            (data, response) = try await URLSession.shared.data(for: req)
+            let (bytes, headers) = try await Self.boundedSession.bytes(for: req)
+            defer { bytes.task.cancel() }
+            guard headers.expectedContentLength <= Int64(Self.maxResponseBytes) else {
+                throw ServiceError.transport(baseURL.absoluteString, "response exceeds the size limit")
+            }
+            response = headers
+            data = try await Self.boundedData(bytes)
         } catch let urlError as URLError {
             let host = baseURL.absoluteString
             switch urlError.code {

@@ -247,27 +247,46 @@ public sealed class PrismService
     /// Run one request with the shared friendly-error mapping.
     private async Task<string> SendAsync(HttpRequestMessage req)
     {
-        HttpResponseMessage resp;
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(120));
         try
         {
-            resp = await Http.SendAsync(req);
+            using var resp = await Http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, deadline.Token);
+            var body = await ReadResponseBodyAsync(resp, deadline.Token);
+            if (!resp.IsSuccessStatusCode)
+                throw new ServiceHttpException((int)resp.StatusCode, body);
+            return body;
         }
-        catch (TaskCanceledException)
+        catch (OperationCanceledException)
         {
             throw new ServiceHttpException(0, $"Request to {BaseUrl.Host} timed out. Is the web service responding?");
         }
-        catch (HttpRequestException e)
+        catch (Exception e) when (e is HttpRequestException or IOException)
         {
             throw new ServiceHttpException(0, $"Cannot reach {BaseUrl.Host}: {e.Message}");
         }
-        using (resp)
+    }
+
+    // A maximum missing-assets response contains 100,000 SHA-256 strings.
+    // Bound both successful and error responses, including chunked bodies.
+    internal static async Task<string> ReadResponseBodyAsync(HttpResponseMessage resp, CancellationToken cancellation, int limit = 8 * 1024 * 1024)
+    {
+        if (resp.Content.Headers.ContentLength is long length && length > limit)
+            throw new ServiceHttpException(0, "service response exceeds the size limit");
+        using var input = await resp.Content.ReadAsStreamAsync(cancellation);
+        using var data = new MemoryStream();
+        var buffer = new byte[16 * 1024];
+        for (;;)
         {
-            var body = await resp.Content.ReadAsStringAsync();
-            if (!resp.IsSuccessStatusCode)
-            {
-                throw new ServiceHttpException((int)resp.StatusCode, body);
-            }
-            return body;
+            var count = await input.ReadAsync(buffer.AsMemory(0, (int)Math.Min(buffer.Length, limit + 1L - data.Length)), cancellation);
+            if (count == 0) break;
+            if (data.Length + count > limit)
+                throw new ServiceHttpException(0, "service response exceeds the size limit");
+            data.Write(buffer, 0, count);
         }
+        data.Position = 0;
+        var charset = resp.Content.Headers.ContentType?.CharSet?.Trim('"');
+        var encoding = string.IsNullOrEmpty(charset) ? Encoding.UTF8 : Encoding.GetEncoding(charset);
+        using var reader = new StreamReader(data, encoding, detectEncodingFromByteOrderMarks: string.IsNullOrEmpty(charset));
+        return await reader.ReadToEndAsync(cancellation);
     }
 }
