@@ -357,6 +357,7 @@ async function route(cube: Cube, req: Request): Promise<Response> {
       body: new Uint8Array(await req.arrayBuffer()),
       contentType: req.headers.get("content-type") ?? undefined,
       uploader: authorOf(auth),
+      authorizeRestore: () => can("delete"),
     });
     return json(
       { name: result.name, sha256: result.sha256, size: result.size },

@@ -192,6 +192,27 @@ skippable("overwrite pushes the old version into cube_media_revision", async () 
   assert.equal(overwriteLog.rows[0].detail.sha256, newSha);
 });
 
+skippable("media restore requires deletion authority for identical and changed bytes", async () => {
+  const first = Buffer.from("restore first");
+  const changed = Buffer.from("restore changed");
+  const upload = (name: string, bytes: Buffer<ArrayBuffer>, cookie: string) => cube.handlers.POST(
+    req("POST", `/media?name=${encodeURIComponent(name)}`, { bytes, headers: csrf(cookie) }));
+  const remove = () => cube.handlers.DELETE(req("DELETE", "/media?name=Restore_test.png", {
+    body: {}, headers: csrf(modCookie),
+  }));
+  assert.equal((await upload("Restore test.png", first, uploaderCookie)).status, 201);
+  assert.equal((await remove()).status, 200);
+  for (const bytes of [first, changed]) {
+    assert.equal((await upload("restore test.png", bytes, uploaderCookie)).status, 403);
+    assert.equal((await cube.handlers.GET(req("GET", "/media/info?name=Restore_test.png"))).status, 404);
+  }
+  const digest = sha256hex(changed);
+  assert.equal(existsSync(join(dir, digest.slice(0, 2), digest)), false);
+  assert.equal((await upload("Restore_test.png", first, modCookie)).status, 200);
+  assert.equal((await remove()).status, 200);
+  assert.equal((await upload("Restore test.png", changed, modCookie)).status, 200);
+});
+
 skippable("media search finds names by trgm", async () => {
   const res = await cube.handlers.GET(req("GET", "/media/search?q=F.png"));
   assert.equal(res.status, 200);
