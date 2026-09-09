@@ -2037,6 +2037,8 @@ mod app {
     /// final chunk returns `stored` (or `exists`).
     unsafe fn upload_asset_chunked(assets_url: &str, sha: &str, path: &std::path::Path) -> bool {
         let Ok(bytes) = std::fs::read(path) else { return false };
+        let Ok(upload_token) = prism_core::upload_token::new_upload_token() else { return false };
+        let upload_headers = format!("Content-Type: application/octet-stream\r\nX-Upload-Token: {upload_token}");
         let mut offset: usize = 0;
         let mut last_staged: Option<usize> = None;
         let mut throttled = 0u32;
@@ -2044,7 +2046,7 @@ mod app {
             let end = (offset + UPLOAD_CHUNK).min(bytes.len());
             let url = format!("{assets_url}/{sha}?offset={offset}");
             let chunk = &bytes[offset..end];
-            match http_request("PUT", &url, Some("Content-Type: application/octet-stream"), chunk) {
+            match http_request("PUT", &url, Some(&upload_headers), chunk) {
                 Ok((code, body)) if (200..300).contains(&code) => {
                     let v = serde_json::from_str::<serde_json::Value>(&body).unwrap_or_default();
                     match v.get("status").and_then(|s| s.as_str()) {

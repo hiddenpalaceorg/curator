@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import type { NextRequest } from "next/server";
 import { getPool } from "@/lib/db";
 import {
@@ -23,13 +23,14 @@ export const dynamic = "force-dynamic";
 // referenced by the submission's (or an ingested build's) record; nothing else
 // about the request is trusted — the content address is the authority.
 //
-// Chunk protocol: each request appends at `offset` (default 0; 0 restarts) to
-// a staging file. A wrong offset answers 409 with the staged size so the
+// Chunk protocol: each uploader supplies a private X-Upload-Token capability
+// across its requests. Offsets and restarts affect only that token's file.
+// A wrong offset answers 409 with that file's staged size so the
 // client can resume; a short append answers 202 with the new offset. When the
 // staged size reaches the record's claimed size the file must hash to
 // <assetSha> — then it lands in the store (201) — or staging is dropped (422).
-// The final hash makes interleaved/duplicate chunk writes harmless: they can
-// only cost a retry, never store wrong bytes. Idempotent by construction.
+// The digest lease serializes compare-and-append and finalization. Tokens
+// never come from public submission metadata or the missing-assets endpoint.
 //
 // Staging abandoned by a crashed client is bounded (referenced assets only)
 // and reclaimed the next time that blob's upload restarts at offset 0.
@@ -52,6 +53,13 @@ export async function PUT(
   if (!isSha256(sha256) || !isSha256(assetSha)) {
     return Response.json({ error: "invalid sha256" }, { status: 400 });
   }
+  const suppliedToken = request.headers.get("x-upload-token");
+  if (suppliedToken !== null && !/^[0-9a-f]{32}$/.test(suppliedToken)) {
+    return Response.json({error:"invalid upload token"},{status:400});
+  }
+  // Legacy one-shot uploads get a private non-resumable file, never the old
+  // shared digest path. A client restart may safely begin a new token at zero.
+  const uploadToken = suppliedToken ?? randomBytes(16).toString("hex");
 
   const refs = await referencedAssets(getPool(), sha256);
   if (!refs) return Response.json({ error: "not found" }, { status: 404 });
@@ -73,6 +81,7 @@ export async function PUT(
   if (!Number.isInteger(offset) || offset < 0 || offset > claimed) {
     return Response.json({ error: "invalid offset" }, { status: 400 });
   }
+  if (suppliedToken === null && offset !== 0) return Response.json({error:"resumable uploads require X-Upload-Token"},{status:400});
   if (!request.body) return Response.json({ error: "missing body" }, { status: 400 });
 
   // Reap abandoned staging, then refuse to grow it when the disk is low: the
@@ -84,7 +93,7 @@ export async function PUT(
   }
 
   // A non-zero offset must continue exactly where the staging file ends.
-  const part = assetStagingPath(assetSha);
+  const part = assetStagingPath(assetSha,uploadToken);
   if (offset !== 0) {
     let staged = 0;
     try {
@@ -100,6 +109,7 @@ export async function PUT(
   const fh = await fsp.open(part, offset === 0 ? "w" : "a");
   let received = 0;
   let overrun = false;
+  let failed = false;
   const reader = request.body.getReader();
   try {
     for (;;) {
@@ -113,8 +123,12 @@ export async function PUT(
       }
       await fh.write(value);
     }
+  } catch (error) {
+    failed = true;
+    throw error;
   } finally {
     await fh.close();
+    if (failed && (suppliedToken === null || (offset === 0 && received === 0))) await fsp.rm(part,{force:true});
   }
   if (overrun) {
     await fsp.rm(part, { force: true }).catch(() => {});
@@ -122,6 +136,10 @@ export async function PUT(
   }
 
   const size = offset + received;
+  if (received === 0 || (suppliedToken === null && size < claimed)) {
+    if (offset === 0) await fsp.rm(part,{force:true});
+    return Response.json({error:received === 0 ? "empty upload chunk" : "resumable uploads require X-Upload-Token"},{status:400});
+  }
   if (size < claimed) {
     return Response.json({ sha256: assetSha, status: "partial", offset: size }, { status: 202 });
   }
@@ -139,5 +157,5 @@ export async function PUT(
   const outcome = await storeBlobFromFile(assetSha, part);
   if (outcome === "exists") return Response.json({ sha256: assetSha, status: "exists" });
   return Response.json({ sha256: assetSha, status: "stored" }, { status: 201 });
-  });
+  }, uploadToken);
 }

@@ -52,8 +52,25 @@ export function assetBlobPath(sha256: string, ns = ""): string {
 
 /** Staging file for a blob's chunked upload (`.staging` can't collide with the
  *  two-hex-char blob dirs). Caller must have validated `sha256`. */
-export function assetStagingPath(sha256: string): string {
-  return path.join(assetStoreDir(), ".staging", `${sha256}.part`);
+export function assetStagingPath(sha256: string, token?: string): string {
+  if (token !== undefined && !/^[0-9a-f]{32}$/.test(token)) throw new Error("invalid upload token");
+  return path.join(assetStoreDir(), ".staging", `${sha256}${token ? `-${token}` : ""}.part`);
+}
+
+const ASSET_PART_NAME = /^[0-9a-f]{64}(?:-[0-9a-f]{32})?\.part$/;
+
+/** All uploader-private partial copies contribute to the digest's quota. */
+export async function assetStagingStats(sha256: string): Promise<{bytes:number;count:number}> {
+  let dir;
+  try { dir = await fsp.opendir(path.join(assetStoreDir(), ".staging")); }
+  catch (e) { if ((e as NodeJS.ErrnoException).code === "ENOENT") return {bytes:0,count:0}; throw e; }
+  let bytes = 0, count = 0;
+  for await (const entry of dir) {
+    if (entry.name.slice(0,64) !== sha256 || !ASSET_PART_NAME.test(entry.name)) continue;
+    bytes += (await fsp.stat(path.join(assetStoreDir(), ".staging", entry.name))).size;
+    count++;
+  }
+  return {bytes,count};
 }
 
 // Asset staging files (`<sha>.part`) abandoned this long are reaped, so a flood
@@ -76,7 +93,7 @@ export async function reapStaleAssetStaging(
     return reaped;
   }
   for (const name of names) {
-    if (!/^[0-9a-f]{64}\.part$/.test(name)) continue;
+    if (!ASSET_PART_NAME.test(name)) continue;
     const p = path.join(dir, name);
     try {
       if ((await fsp.stat(p)).mtimeMs >= cutoff) continue;
@@ -140,7 +157,7 @@ export function storeIdentity(): string {
 }
 
 /** Actual asset objects and partial assets; excludes separate media namespaces. */
-export async function* inventoryAssetBytes(): AsyncGenerator<{ sha256: string; size: number }> {
+export async function* inventoryAssetBytes(): AsyncGenerator<{ sha256: string; size: number; staged?: boolean }> {
   if (s3Enabled()) {
     let token: string | undefined;
     do {
@@ -174,8 +191,8 @@ export async function* inventoryAssetBytes(): AsyncGenerator<{ sha256: string; s
   try { staging = await fsp.opendir(path.join(assetStoreDir(), ".staging")); }
   catch (e) { if ((e as NodeJS.ErrnoException).code === "ENOENT") return; throw e; }
   for await (const entry of staging) {
-    if (!/^[0-9a-f]{64}\.part$/.test(entry.name)) continue;
-    yield { sha256: entry.name.slice(0, 64), size: (await fsp.stat(path.join(assetStoreDir(), ".staging", entry.name))).size };
+    if (!ASSET_PART_NAME.test(entry.name)) continue;
+    yield { sha256: entry.name.slice(0, 64), size: (await fsp.stat(path.join(assetStoreDir(), ".staging", entry.name))).size, staged: true };
   }
 }
 

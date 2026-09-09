@@ -259,6 +259,7 @@ impl Client {
         report: &dyn Fn(usize),
     ) -> bool {
         let Ok(bytes) = std::fs::read(path) else { return false };
+        let Ok(upload_token) = prism_core::upload_token::new_upload_token() else { return false };
         let mut offset: usize = 0;
         let mut reported: usize = 0;
         let mut last_staged: Option<usize> = None;
@@ -270,7 +271,7 @@ impl Client {
             let Ok((code, body)) = self.request(
                 "PUT",
                 &url,
-                &[("Content-Type", "application/octet-stream")],
+                &[("Content-Type", "application/octet-stream"), ("X-Upload-Token", &upload_token)],
                 Some(chunk),
             ) else {
                 return false;

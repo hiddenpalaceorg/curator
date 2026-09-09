@@ -20,3 +20,4 @@ rusqlite.workspace = true
 directories.workspace = true
 zip.workspace = true
 chrono.workspace = true
+getrandom = "0.2"

@@ -152,6 +152,7 @@ public sealed class PrismService
     /// resume from, and the final chunk returns `stored` (or `exists`).
     public async Task UploadAssetAsync(string buildSha, string assetSha, string filePath)
     {
+        var uploadToken = Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(16)).ToLowerInvariant();
         using var file = File.OpenRead(filePath);
         long offset = 0;
         long? lastStaged = null;
@@ -168,6 +169,7 @@ public sealed class PrismService
             }
             var url = new Uri(BaseUrl, $"/api/submissions/{buildSha}/assets/{assetSha}?offset={offset}");
             using var req = new HttpRequestMessage(HttpMethod.Put, url);
+            req.Headers.Add("X-Upload-Token", uploadToken);
             req.Content = new ByteArrayContent(buffer, 0, read);
             req.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/octet-stream");
             try
