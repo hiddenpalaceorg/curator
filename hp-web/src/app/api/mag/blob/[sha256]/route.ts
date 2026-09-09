@@ -1,20 +1,25 @@
 import type { NextRequest } from "next/server";
 import { blobSize, openBlobStream } from "@/lib/blobstore";
-import { IMMUTABLE_CACHE, SANDBOX_CSP, streamResponse } from "@/lib/http";
-import { MAG_NS, magImageUrl } from "@/lib/mag/store";
+import { SANDBOX_CSP, streamResponse } from "@/lib/http";
+import { MAG_NS } from "@/lib/mag/store";
 import { isSha256 } from "@/lib/validate";
+import { getModerator } from "@/lib/auth";
+import { getPool } from "@/lib/db";
+import { canReadMagImage, MAG_IMAGE_HEADERS } from "@/lib/mag/access";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 // GET /api/mag/blob/<sha256> — one magazine image blob (page render or
-// crop). With a public gateway configured this 307s there (same contract as
-// /api/asset); without one it streams from the local store. Serves images
+// crop). Always authorizes before streaming, even with a public asset
+// gateway configured. Serves images
 // only: the mag/ namespace also holds source PDFs, which are moderator-only
 // and refuse to leave through this route.
 export async function GET(request: NextRequest, ctx: { params: Promise<{ sha256: string }> }) {
   const { sha256 } = await ctx.params;
   if (!isSha256(sha256)) return Response.json({ error: "invalid sha256" }, { status: 400 });
+  if (!(await canReadMagImage(getPool(), sha256, !!(await getModerator(request)))))
+    return Response.json({ error: "not found" }, { status: 404, headers: MAG_IMAGE_HEADERS });
 
   const size = await blobSize(sha256, MAG_NS);
   if (size === null) return Response.json({ error: "not found" }, { status: 404 });
@@ -22,25 +27,15 @@ export async function GET(request: NextRequest, ctx: { params: Promise<{ sha256:
   const contentType = sniffImage(await headOf(sha256));
   if (!contentType) return Response.json({ error: "not an image" }, { status: 415 });
 
-  const gateway = process.env.ASSET_PUBLIC_BASE;
-  if (gateway) {
-    // 307 + bounded cache, never 308 (see /api/asset: a cached permanent
-    // redirect stranded browsers when the gateway moved hosts).
-    return new Response(null, {
-      status: 307,
-      headers: { Location: magImageUrl(sha256), "Cache-Control": "public, max-age=3600" },
-    });
-  }
-
   const etag = `"${sha256}-mag"`;
   if (request.headers.get("if-none-match") === etag) {
-    return new Response(null, { status: 304, headers: { "Cache-Control": IMMUTABLE_CACHE, ETag: etag } });
+    return new Response(null, { status: 304, headers: { ...MAG_IMAGE_HEADERS, ETag: etag } });
   }
   const stream = await openBlobStream(sha256, undefined, MAG_NS);
   if (!stream) return Response.json({ error: "not found" }, { status: 404 });
   return streamResponse(stream, size, null, {
     "Content-Type": contentType,
-    "Cache-Control": IMMUTABLE_CACHE,
+    ...MAG_IMAGE_HEADERS,
     ETag: etag,
     "X-Content-Type-Options": "nosniff",
     "Content-Security-Policy": SANDBOX_CSP,

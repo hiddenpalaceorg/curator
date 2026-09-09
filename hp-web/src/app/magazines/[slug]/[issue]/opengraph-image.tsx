@@ -105,7 +105,7 @@ async function render(issue: IssueWithMagazine, extracts: number, cover: string 
   const img = new ImageResponse(<Card issue={issue} extracts={extracts} cover={cover} />, size);
   const buf = await img.arrayBuffer();
   return new Response(buf, {
-    headers: { "Content-Type": contentType, "Cache-Control": "public, max-age=3600" },
+    headers: { "Content-Type": contentType, "Cache-Control": "private, no-store" },
   });
 }
 

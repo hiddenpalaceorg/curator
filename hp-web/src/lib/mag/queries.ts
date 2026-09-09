@@ -149,12 +149,12 @@ const EXTRACT_COLS = `e.id::int AS id, e.issue_id::int AS issue_id, e.kind, e.se
   e.is_fictional, e.sponsored, e.content_warning, e.status`;
 
 /** The aggregated sub-selects every ExtractView needs. Keyed off alias `e`. */
-const EXTRACT_AGG = `
+const extractAgg = (privatePages = false) => `
   COALESCE((SELECT json_agg(json_build_object(
       'id', r.id::int, 'seq', r.seq::int, 'pdf_index', p.pdf_index::int,
       'printed_label', p.printed_label,
       'x', r.x, 'y', r.y, 'w', r.w, 'h', r.h,
-      'crop_sha256', r.crop_sha256, 'page_sha256', p.image_sha256,
+      'crop_sha256', r.crop_sha256, 'page_sha256', ${privatePages ? "p.image_sha256" : "CASE WHEN EXISTS (SELECT 1 FROM magazine_issue pi JOIN magazines pm ON pm.id=pi.magazine_id WHERE pi.id=p.issue_id AND pm.pages_public) THEN p.image_sha256 ELSE NULL END"},
       'page_width', p.width::int, 'page_height', p.height::int) ORDER BY r.seq)
     FROM extract_region r JOIN magazine_page p ON p.id=r.page_id
     WHERE r.extract_id=e.id), '[]') AS regions,
@@ -221,7 +221,7 @@ export async function listMagazines(pool: Pool): Promise<MagazineListItem[]> {
             (SELECT count(*) FROM magazine_issue i WHERE i.magazine_id=m.id)::int AS issue_count,
             (SELECT p.image_sha256 FROM magazine_issue i
                JOIN magazine_page p ON p.issue_id=i.id AND p.pdf_index=1
-             WHERE i.magazine_id=m.id AND p.image_sha256 IS NOT NULL
+             WHERE i.magazine_id=m.id AND m.pages_public AND p.image_sha256 IS NOT NULL
              ORDER BY i.cover_date ASC NULLS LAST, i.slug LIMIT 1) AS cover_sha
      FROM magazines m
      ORDER BY lower(m.title)`
@@ -313,7 +313,8 @@ export async function listIssues(pool: Pool, magazineId: number): Promise<IssueL
   const r = await pool.query(
     `SELECT ${ISSUE_COLS},
             (SELECT p.image_sha256 FROM magazine_page p
-             WHERE p.issue_id=i.id AND p.pdf_index=1) AS cover_sha,
+             WHERE p.issue_id=i.id AND p.pdf_index=1
+               AND EXISTS (SELECT 1 FROM magazines m WHERE m.id=i.magazine_id AND m.pages_public)) AS cover_sha,
             (SELECT count(*) FROM magazine_extract e
              WHERE e.issue_id=i.id AND e.status<>'rejected')::int AS extract_count
      FROM magazine_issue i
@@ -579,9 +580,9 @@ function toView(row: Record<string, unknown>): ExtractView {
   return row as unknown as ExtractView;
 }
 
-export async function getExtract(pool: Pool, id: number): Promise<ExtractView | null> {
+export async function getExtract(pool: Pool, id: number, privatePages = false): Promise<ExtractView | null> {
   const r = await pool.query(
-    `SELECT ${EXTRACT_COLS}, ${EXTRACT_AGG} FROM magazine_extract e WHERE e.id=$1`,
+    `SELECT ${EXTRACT_COLS}, ${extractAgg(privatePages)} FROM magazine_extract e WHERE e.id=$1`,
     [id]
   );
   return r.rows[0] ? toView(r.rows[0]) : null;
@@ -590,10 +591,11 @@ export async function getExtract(pool: Pool, id: number): Promise<ExtractView | 
 export async function getIssueExtracts(
   pool: Pool,
   issueId: number,
-  includeRejected = false
+  includeRejected = false,
+  privatePages = false
 ): Promise<ExtractView[]> {
   const r = await pool.query(
-    `SELECT ${EXTRACT_COLS}, ${EXTRACT_AGG}
+    `SELECT ${EXTRACT_COLS}, ${extractAgg(privatePages)}
      FROM magazine_extract e
      WHERE e.issue_id=$1 AND ${includeRejected ? "TRUE" : "e.status <> 'rejected'"}
      ORDER BY e.seq, e.id`,
@@ -636,7 +638,7 @@ export async function amendExtract(
   patch: AmendPatch,
   editor: string
 ): Promise<ExtractView | null> {
-  const current = await getExtract(pool, id);
+  const current = await getExtract(pool, id, true);
   if (!current) return null;
 
   const change: Record<string, [unknown, unknown]> = {};
@@ -704,7 +706,7 @@ export async function amendExtract(
   } finally {
     client.release();
   }
-  return getExtract(pool, id);
+  return getExtract(pool, id, true);
 }
 
 export async function setExtractRejected(
@@ -714,7 +716,7 @@ export async function setExtractRejected(
   editor: string,
   note?: string
 ): Promise<ExtractView | null> {
-  const current = await getExtract(pool, id);
+  const current = await getExtract(pool, id, true);
   if (!current) return null;
   const next = rejected ? "rejected" : "amended";
   if (current.status === next) return current;
@@ -725,7 +727,7 @@ export async function setExtractRejected(
     JSON.stringify({ status: [current.status, next] }),
     note ?? null,
   ]);
-  return getExtract(pool, id);
+  return getExtract(pool, id, true);
 }
 
 export interface RevisionRow {
