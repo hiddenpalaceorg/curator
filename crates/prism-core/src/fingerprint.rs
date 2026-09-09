@@ -362,8 +362,16 @@ struct DirBuild {
     files: BTreeMap<String, Node>,
 }
 
+// Leave room for the surrounding record within serde_json's recursion limit.
+const MAX_PATH_DEPTH: usize = 60;
+
 /// Build the nested filesystem tree from the adapter's flat path list.
-pub fn build_tree(files: &[RawFile]) -> Vec<Node> {
+pub fn build_tree(files: &[RawFile]) -> Result<Vec<Node>> {
+    // Validate the complete, archive-prefixed path before constructing any
+    // recursive value (including one that would recurse when dropped on error).
+    if files.iter().any(|f| f.path.split('/').filter(|s| !s.is_empty()).take(MAX_PATH_DEPTH + 1).count() > MAX_PATH_DEPTH) {
+        return Err(crate::error::Error::Adapter("file path exceeds the depth limit".into()));
+    }
     let mut root = DirBuild::default();
 
     for f in files {
@@ -398,7 +406,7 @@ pub fn build_tree(files: &[RawFile]) -> Vec<Node> {
         }
     }
 
-    finish_dir(root)
+    Ok(finish_dir(root))
 }
 
 fn finish_dir(mut d: DirBuild) -> Vec<Node> {
@@ -522,7 +530,7 @@ mod tests {
 
     #[test]
     fn build_tree_nests_paths() {
-        let tree = build_tree(&[file("/DATA/SUB/x.bin", A), file("/root.bin", B)]);
+        let tree = build_tree(&[file("/DATA/SUB/x.bin", A), file("/root.bin", B)]).unwrap();
         let names: Vec<&str> = tree.iter().map(|n| n.name()).collect();
         assert!(names.contains(&"DATA"), "got {names:?}");
         assert!(names.contains(&"root.bin"), "got {names:?}");
@@ -570,7 +578,7 @@ mod tests {
             zip,
             member("/DATA/PATCH.ZIP/src/main.c", B),
             member("/DATA/PATCH.ZIP/title.png", C),
-        ]);
+        ]).unwrap();
         let Node::Dir { children: data, .. } = &tree[0] else { panic!("DATA should be a dir") };
         // One node for the archive — a dir carrying the file's own hashes/size.
         assert_eq!(data.len(), 1);
@@ -586,6 +594,29 @@ mod tests {
             }
             _ => panic!("PATCH.ZIP should have become a dir node"),
         }
+    }
+
+    #[test]
+    fn tree_depth_is_bounded_before_construction() {
+        for depth in [MAX_PATH_DEPTH + 1, 10_000] {
+            let path = vec!["nested.zip"; depth].join("/");
+            assert!(build_tree(&[file("ordinary", A), member(&path, B)]).is_err());
+            assert!(build_tree(&[dir(&path)]).is_err());
+        }
+        let path = vec!["long Unicode name 日本語"; MAX_PATH_DEPTH].join("//");
+        let files = [file(&path, A)];
+        let record = BuildRecord {
+            record_schema_version: RECORD_SCHEMA_VERSION,
+            fingerprint_profile: FINGERPRINT_PROFILE.into(),
+            image: ImageInfo { name: "disc".into(), size: 0, md5: "".into(), sha1: "".into(), sha256: "".into() },
+            info: DiscInfo::default(), composites: composites(&files),
+            structural: structural("PSX", &files), text_doc: "".into(),
+            contents: build_tree(&files).unwrap(), media: vec![], exe_fp: None,
+            chunk_signature: None, resemblance: None, assets: None, asset_profile: ASSET_PROFILE,
+        };
+        let json = serde_json::to_vec(&record).unwrap();
+        let decoded: BuildRecord = serde_json::from_slice(&json).unwrap();
+        assert_eq!(serde_json::to_vec(&decoded.clone()).unwrap(), json);
     }
 
     #[test]
