@@ -261,7 +261,7 @@ impl Client {
         let Ok(bytes) = std::fs::read(path) else { return false };
         let mut offset: usize = 0;
         let mut reported: usize = 0;
-        let mut last_staged: Option<usize> = None;
+        let mut progress = prism_core::upload_progress::UploadProgress::new(bytes.len() as u64);
         let mut throttled = 0u32;
         while offset < bytes.len() {
             let end = (offset + UPLOAD_CHUNK).min(bytes.len());
@@ -285,19 +285,16 @@ impl Client {
                             }
                             return true;
                         }
-                        _ => {
-                            offset = v
-                                .get("offset")
-                                .and_then(|o| o.as_u64())
-                                .map(|o| o as usize)
-                                .unwrap_or(end);
+                        Some("partial") => {
+                            let Some(next) = progress.advance(v.get("offset").and_then(|o| o.as_u64())) else { return false };
+                            offset = next as usize;
                             if offset > reported {
                                 report(offset - reported);
                                 reported = offset;
                             }
-                            last_staged = None;
                             throttled = 0;
                         }
+                        _ => return false,
                     }
                 }
                 429 => {
@@ -315,17 +312,13 @@ impl Client {
                     std::thread::sleep(Duration::from_secs_f64(secs));
                 }
                 409 => {
-                    // Resume where the server actually is; the same answer
-                    // twice means we're not making progress — give up.
+                    // Resynchronization may move backwards, but is bounded
+                    // across the entire upload, including intervening successes.
                     let staged = serde_json::from_str::<serde_json::Value>(&body)
                         .ok()
-                        .and_then(|v| v.get("offset").and_then(|o| o.as_u64()))
-                        .map(|o| o as usize)
-                        .unwrap_or(0);
-                    if last_staged == Some(staged) {
-                        return false;
-                    }
-                    last_staged = Some(staged);
+                        .and_then(|v| v.get("offset").and_then(|o| o.as_u64()));
+                    let Some(staged) = progress.resume(staged) else { return false };
+                    let staged = staged as usize;
                     offset = staged;
                     if staged > reported {
                         report(staged - reported);

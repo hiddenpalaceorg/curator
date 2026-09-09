@@ -2038,7 +2038,7 @@ mod app {
     unsafe fn upload_asset_chunked(assets_url: &str, sha: &str, path: &std::path::Path) -> bool {
         let Ok(bytes) = std::fs::read(path) else { return false };
         let mut offset: usize = 0;
-        let mut last_staged: Option<usize> = None;
+        let mut progress = prism_core::upload_progress::UploadProgress::new(bytes.len() as u64);
         let mut throttled = 0u32;
         while offset < bytes.len() {
             let end = (offset + UPLOAD_CHUNK).min(bytes.len());
@@ -2049,15 +2049,12 @@ mod app {
                     let v = serde_json::from_str::<serde_json::Value>(&body).unwrap_or_default();
                     match v.get("status").and_then(|s| s.as_str()) {
                         Some("stored") | Some("exists") => return true,
-                        _ => {
-                            offset = v
-                                .get("offset")
-                                .and_then(|o| o.as_u64())
-                                .map(|o| o as usize)
-                                .unwrap_or(end);
-                            last_staged = None;
+                        Some("partial") => {
+                            let Some(next) = progress.advance(v.get("offset").and_then(|o| o.as_u64())) else { return false };
+                            offset = next as usize;
                             throttled = 0;
                         }
+                        _ => return false,
                     }
                 }
                 Ok((429, body)) => {
@@ -2075,18 +2072,12 @@ mod app {
                     std::thread::sleep(std::time::Duration::from_secs_f64(secs));
                 }
                 Ok((409, body)) => {
-                    // Resume where the server actually is; the same answer twice
-                    // means we're not making progress — give up.
+                    // Bound resynchronization across the entire upload.
                     let staged = serde_json::from_str::<serde_json::Value>(&body)
                         .ok()
-                        .and_then(|v| v.get("offset").and_then(|o| o.as_u64()))
-                        .map(|o| o as usize)
-                        .unwrap_or(0);
-                    if last_staged == Some(staged) {
-                        return false;
-                    }
-                    last_staged = Some(staged);
-                    offset = staged;
+                        .and_then(|v| v.get("offset").and_then(|o| o.as_u64()));
+                    let Some(staged) = progress.resume(staged) else { return false };
+                    offset = staged as usize;
                 }
                 _ => return false,
             }
