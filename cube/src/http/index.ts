@@ -12,7 +12,7 @@ import { Readable } from "node:stream";
 import type { Pool } from "pg";
 import { defaultCan, type CubeAction, type CubeUser } from "../auth/native";
 import { diffRevisions } from "../diff";
-import { CubeConflictError, CubeValidationError, type Issue } from "../issues";
+import { CubeAuthorizationError, CubeConflictError, CubeValidationError, type Issue } from "../issues";
 import {
   CubeMediaError,
   deleteMedia,
@@ -77,6 +77,7 @@ export function createHandlers(cube: Cube): CubeHandlers {
       return await route(cube, req);
     } catch (e) {
       if (e instanceof CubeValidationError) return issueError(e.issues);
+      if (e instanceof CubeAuthorizationError) return err("forbidden", 403, e.message);
       if (e instanceof CubeConflictError) {
         return json(
           {
@@ -216,6 +217,8 @@ async function route(cube: Cube, req: Request): Promise<Response> {
         author: authorOf(auth),
         comment: body.comment ?? "",
         minor: body.minor ?? false,
+        authorize: async (page) => await can(page.exists ? "edit" : "create", page) &&
+          (!page.deleted || await can("delete", page)),
       });
       return json(
         {
