@@ -4,6 +4,7 @@ import { storeBlobFromFile } from "@/lib/blobstore";
 import { requireContributor, revalidateBuildPages } from "@/lib/contrib";
 import { getPool } from "@/lib/db";
 import { extractStill } from "@/lib/ffmpeg";
+import { conversionBusyResponse } from "@/lib/conversion-queue";
 import {
   MEDIA_NS,
   dropMediaSession,
@@ -166,7 +167,9 @@ async function append(
       await extractStill(staging, posterTmp);
       poster = await hashFile(posterTmp);
       await storeBlobFromFile(poster, posterTmp, { ns: MEDIA_NS });
-    } catch {
+    } catch (error) {
+      const busy = conversionBusyResponse(error);
+      if (busy) return busy;
       // No usable ffmpeg or no decodable frame: the video plays without one.
       await fsp.rm(posterTmp, { force: true });
       poster = null;

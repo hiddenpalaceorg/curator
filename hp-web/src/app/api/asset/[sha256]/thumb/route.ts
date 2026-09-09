@@ -3,6 +3,7 @@ import fsp from "node:fs/promises";
 import type { NextRequest } from "next/server";
 import { getAssetMeta } from "@/lib/assets";
 import { ensureThumb } from "@/lib/ffmpeg";
+import { conversionBusyResponse } from "@/lib/conversion-queue";
 import { IMMUTABLE_CACHE, SANDBOX_CSP, streamResponse } from "@/lib/http";
 import { isSha256 } from "@/lib/validate";
 
@@ -35,7 +36,9 @@ export async function GET(request: NextRequest, ctx: { params: Promise<{ sha256:
   let thumb: string;
   try {
     thumb = await ensureThumb(sha256);
-  } catch {
+  } catch (error) {
+    const busy = conversionBusyResponse(error);
+    if (busy) return busy;
     // No usable ffmpeg, blob missing from the store, or no decodable frame.
     return Response.json({ error: "no thumbnail" }, { status: 415 });
   }

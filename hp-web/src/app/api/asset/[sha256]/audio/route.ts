@@ -4,6 +4,7 @@ import type { NextRequest } from "next/server";
 import { getAssetMeta } from "@/lib/assets";
 import { readBlobHead } from "@/lib/blobstore";
 import { ensureAudioTranscode } from "@/lib/ffmpeg";
+import { conversionBusyResponse } from "@/lib/conversion-queue";
 import { IMMUTABLE_CACHE, SANDBOX_CSP, contentDisposition, streamResponse } from "@/lib/http";
 import { parseRange } from "@/lib/range";
 import { isSha256 } from "@/lib/validate";
@@ -61,7 +62,9 @@ export async function GET(request: NextRequest, ctx: { params: Promise<{ sha256:
   let audioPath: string;
   try {
     audioPath = await ensureAudioTranscode(sha256);
-  } catch {
+  } catch (error) {
+    const busy = conversionBusyResponse(error);
+    if (busy) return busy;
     // No usable ffmpeg, blob missing from the store, or ffmpeg rejected or
     // timed out on the input.
     return Response.json({ error: "untranscodable audio" }, { status: 415 });

@@ -6,6 +6,7 @@ import { IMMUTABLE_CACHE, contentDisposition } from "@/lib/http";
 import { pngConvertible, toPng, WEB_SAFE_IMAGE } from "@/lib/imgpng";
 import { psdConvertible, psdToPng } from "@/lib/psd";
 import { isSha256 } from "@/lib/validate";
+import { conversions, conversionBusyResponse } from "@/lib/conversion-queue";
 
 export const runtime = "nodejs";
 
@@ -38,21 +39,20 @@ export async function GET(_request: NextRequest, ctx: { params: Promise<{ sha256
     return Response.json({ error: `no PNG conversion for ${meta.mime}` }, { status: 415 });
   }
 
-  const bytes = await readBlob(sha256);
-  if (bytes === null) {
-    return Response.json({ error: "asset bytes not in store" }, { status: 404 });
-  }
-
-  let png: Buffer;
+  let png: Buffer | null;
   try {
-    png = viaGs
-      ? await gsToPng(meta.mime, bytes)
-      : psdConvertible(meta.mime)
-        ? psdToPng(bytes)
-        : toPng(meta.mime, bytes);
-  } catch {
+    png = await conversions.run(`png:${sha256}:${meta.mime}`, async () => {
+      const bytes = await readBlob(sha256);
+      if (bytes === null) return null;
+      return viaGs ? gsToPng(meta.mime, bytes)
+        : psdConvertible(meta.mime) ? psdToPng(bytes) : toPng(meta.mime, bytes);
+    });
+  } catch (error) {
+    const busy = conversionBusyResponse(error);
+    if (busy) return busy;
     return Response.json({ error: "undecodable image" }, { status: 415 });
   }
+  if (png === null) return Response.json({ error: "asset bytes not in store" }, { status: 404 });
 
   const base = (meta.path.split("/").pop() || sha256).replace(/\.[^.]*$/, "");
   return new Response(new Uint8Array(png), {

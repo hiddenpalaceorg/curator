@@ -6,6 +6,7 @@
 import fsp from "node:fs/promises";
 import { ImageResponse } from "next/og";
 import { getPool } from "@/lib/db";
+import { ConversionBusy, socialPreviewResponse } from "@/lib/conversion-queue";
 import { ensurePhotoScale } from "@/lib/ffmpeg";
 import { MAG_NS } from "@/lib/mag/store";
 import { getIssue, type IssueWithMagazine } from "@/lib/mag/queries";
@@ -27,7 +28,8 @@ async function findCover(issueId: number): Promise<string | null> {
     const scaled = await ensurePhotoScale(sha, MAG_NS, 1000);
     const bytes = await fsp.readFile(scaled);
     return `data:image/jpeg;base64,${bytes.toString("base64")}`;
-  } catch {
+  } catch (error) {
+    if (error instanceof ConversionBusy) throw error;
     return null;
   }
 }
@@ -101,12 +103,9 @@ function Card({ issue, extracts, cover }: { issue: IssueWithMagazine; extracts: 
   );
 }
 
-async function render(issue: IssueWithMagazine, extracts: number, cover: string | null): Promise<Response> {
+async function render(issue: IssueWithMagazine, extracts: number, cover: string | null): Promise<ArrayBuffer> {
   const img = new ImageResponse(<Card issue={issue} extracts={extracts} cover={cover} />, size);
-  const buf = await img.arrayBuffer();
-  return new Response(buf, {
-    headers: { "Content-Type": contentType, "Cache-Control": "public, max-age=3600" },
-  });
+  return img.arrayBuffer();
 }
 
 export default async function OgImage({ params }: { params: Promise<{ slug: string; issue: string }> }) {
@@ -121,10 +120,12 @@ export default async function OgImage({ params }: { params: Promise<{ slug: stri
   const extracts = (count.rows[0] as { n: number }).n;
   // The cover pane respects the per-magazine pages_public toggle: when full
   // pages are unlisted, the unfurl card stays text-only too.
-  const cover = issue.pages_public ? await findCover(issue.id) : null;
-  try {
-    return await render(issue, extracts, cover);
-  } catch {
-    return await render(issue, extracts, null);
-  }
+  return socialPreviewResponse(`issue:${issue.id}:${issue.pages_public}`, async () => {
+    const cover = issue.pages_public ? await findCover(issue.id) : null;
+    try {
+      return await render(issue, extracts, cover);
+    } catch {
+      return render(issue, extracts, null);
+    }
+  });
 }

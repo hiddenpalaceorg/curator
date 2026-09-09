@@ -22,6 +22,7 @@ import { mkdir, readFile, rename, rm, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { assetStoreDir, withBlobFile } from "./blobstore";
+import { conversions, ConversionBusy } from "./conversion-queue";
 
 const execFileP = promisify(execFile);
 
@@ -154,26 +155,26 @@ export async function ensureTranscode(sha256: string): Promise<{ path: string; m
   const running = inFlight.get(sha256);
   if (running) return running.promise;
 
-  const p = await transcodeProfile();
-  if (!p) {
-    failed.add(sha256); // let the status probe answer "failed", not "none" forever
-    throw new Error("ffmpeg not available");
-  }
   failed.delete(sha256);
-  const out = transcodePath(sha256, p.ext);
   const job: Job = {
-    progressPath: `${out}.${randomBytes(4).toString("hex")}.progress`,
+    progressPath: "",
     durationUs: null,
     promise: undefined as unknown as Promise<{ path: string; mime: string }>,
   };
-  job.promise = transcode(sha256, out, p, job)
+  job.promise = conversions.run(`video:${sha256}`, async () => {
+    const p = await transcodeProfile();
+    if (!p) throw new Error("ffmpeg not available");
+    const out = transcodePath(sha256, p.ext);
+    job.progressPath = `${out}.${randomBytes(4).toString("hex")}.progress`;
+    return transcode(sha256, out, p, job);
+  })
     .catch((err) => {
-      failed.add(sha256);
+      if (!(err instanceof ConversionBusy)) failed.add(sha256);
       throw err;
     })
     .finally(() => {
       inFlight.delete(sha256);
-      rm(job.progressPath, { force: true }).catch(() => {});
+      if (job.progressPath) rm(job.progressPath, { force: true }).catch(() => {});
     });
   inFlight.set(sha256, job);
   return job.promise;
@@ -296,7 +297,7 @@ export async function ensureAudioTranscode(sha256: string): Promise<string> {
   if (await nonEmpty(out)) return out;
   let job = audioInFlight.get(sha256);
   if (!job) {
-    job = transcodeAudio(sha256, out).finally(() => audioInFlight.delete(sha256));
+    job = conversions.run(`audio:${sha256}`, () => transcodeAudio(sha256, out)).finally(() => audioInFlight.delete(sha256));
     audioInFlight.set(sha256, job);
   }
   return job;
@@ -342,14 +343,14 @@ export async function ensureThumb(sha256: string): Promise<string> {
   if (await nonEmpty(out)) return out;
   let job = thumbsInFlight.get(sha256);
   if (!job) {
-    job = thumb(sha256, out).finally(() => thumbsInFlight.delete(sha256));
+    job = conversions.run(`thumb:${sha256}`, () => thumb(sha256, out)).finally(() => thumbsInFlight.delete(sha256));
     thumbsInFlight.set(sha256, job);
   }
   return job;
 }
 
 async function thumb(sha256: string, out: string): Promise<string> {
-  const result = await withBlobFile(sha256, (input) => extractStill(input, out));
+  const result = await withBlobFile(sha256, (input) => extractStillAdmitted(input, out));
   if (result === null) throw new Error("blob missing from store");
   return result;
 }
@@ -359,6 +360,10 @@ async function thumb(sha256: string, out: string): Promise<string> {
  *  media-upload poster path (which still has the uploaded file on disk).
  *  Throws when ffmpeg is missing or can't find a frame. */
 export async function extractStill(input: string, out: string): Promise<string> {
+  return conversions.run(`still:${input}:${out}`, () => extractStillAdmitted(input, out));
+}
+
+async function extractStillAdmitted(input: string, out: string): Promise<string> {
   await mkdir(dirname(out), { recursive: true });
   // A quarter in (bounded) skips studio logos and fade-ins; the thumbnail
   // filter then picks the most representative of the next frames, dodging
@@ -424,7 +429,7 @@ export async function ensurePhotoScale(sha256: string, ns = "", width: PhotoScal
   const key = `${sha256}:${width}`;
   let job = photoScalesInFlight.get(key);
   if (!job) {
-    job = scalePhoto(sha256, ns, out, width).finally(() => photoScalesInFlight.delete(key));
+    job = conversions.run(`photo:${key}`, () => scalePhoto(sha256, ns, out, width)).finally(() => photoScalesInFlight.delete(key));
     photoScalesInFlight.set(key, job);
   }
   return job;
