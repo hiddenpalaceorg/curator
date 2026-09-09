@@ -375,6 +375,8 @@ function undiff(data: Buffer, rows: number, rowBytes: number, spp: number): void
 // IFD entry types the decoder consumes; everything else (ASCII, RATIONAL, …)
 // only appears in tags it ignores.
 const TIFF_TYPE_BYTES: Record<number, number> = { 1: 1, 3: 2, 4: 4 }; // BYTE, SHORT, LONG
+const TIFF_TAGS = new Set([256, 257, 258, 259, 262, 266, 273, 277, 278, 279, 284, 317, 320, 322, 324, 332]);
+const MAX_TIFF_VALUES = 2 * (1 << 20) + 1024;
 
 /** Decode a TIFF and re-encode as PNG. Throws on malformed or out-of-scope
  *  input. */
@@ -390,20 +392,46 @@ export function tiffToPng(bytes: Buffer): Buffer {
   const ifd = u32(4);
   if (ifd + 2 > bytes.length) throw new Error("truncated TIFF");
   const tags = new Map<number, number[]>();
+  const descriptors = new Map<number, { size: number; count: number; at: number }>();
   const nEntries = u16(ifd);
   for (let i = 0; i < nEntries; i++) {
     const e = ifd + 2 + i * 12;
     if (e + 12 > bytes.length) throw new Error("truncated TIFF");
+    const tag = u16(e);
+    if (!TIFF_TAGS.has(tag)) continue;
+    if (tag === 322 || tag === 324) throw new Error("unsupported tiled TIFF");
+    if (descriptors.has(tag)) throw new Error("duplicate TIFF tag");
     const size = TIFF_TYPE_BYTES[u16(e + 2)];
     const count = u32(e + 4);
-    if (!size || count === 0 || count > 1 << 20) continue;
+    if (!size || count === 0 || count > 1 << 20) throw new Error("invalid TIFF tag count");
     const at = size * count <= 4 ? e + 8 : u32(e + 8);
-    if (at + size * count > bytes.length) continue; // surfaces later as a missing tag
+    if (at + size * count > bytes.length) throw new Error("truncated TIFF tag");
+    descriptors.set(tag, { size, count, at });
+  }
+  const readValue = (size: number, at: number) => size === 1 ? bytes[at] : size === 2 ? u16(at) : u32(at);
+  const scalar = (tag: number, fallback: number) => {
+    const d = descriptors.get(tag);
+    if (!d) return fallback;
+    if (d.count !== 1) throw new Error("invalid TIFF scalar count");
+    return readValue(d.size, d.at);
+  };
+  const decodedWidth = scalar(256, 0);
+  const decodedHeight = scalar(257, 0);
+  if (decodedWidth <= 0 || decodedHeight <= 0 || decodedWidth * decodedHeight > MAX_PIXELS) {
+    throw new Error("TIFF dimensions out of range");
+  }
+  const stripRows = Math.min(scalar(278, decodedHeight) || decodedHeight, decodedHeight);
+  const stripLimit = Math.ceil(decodedHeight / stripRows);
+  let totalValues = 0;
+  for (const [tag, { size, count, at }] of descriptors) {
+    const cap = tag === 273 || tag === 279 ? stripLimit : tag === 258 ? 4 : tag === 320 ? 768 : 1;
+    totalValues += count;
+    if (count > cap || totalValues > MAX_TIFF_VALUES) throw new Error("TIFF metadata budget exceeded");
     const values = new Array<number>(count);
     for (let j = 0; j < count; j++) {
-      values[j] = size === 1 ? bytes[at + j] : size === 2 ? u16(at + j * 2) : u32(at + j * 4);
+      values[j] = readValue(size, at + j * size);
     }
-    tags.set(u16(e), values);
+    tags.set(tag, values);
   }
   const tag1 = (t: number, dflt: number): number => tags.get(t)?.[0] ?? dflt;
 

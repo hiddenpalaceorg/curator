@@ -224,6 +224,38 @@ test("tiffToPng decodes uncompressed RGB in both byte orders", () => {
   }
 });
 
+test("TIFF ignores unknown metadata without allocating its numeric arrays", () => {
+  for (const le of [true, false]) {
+    const entries: Array<[number, number, number[]]> = [
+      [256, 3, [1]], [257, 3, [1]], [258, 3, [8]], [262, 3, [1]], [273, 4, [8]],
+    ];
+    for (let tag = 500; tag < 504; tag++) entries.push([tag, 1, new Array(65536).fill(0)]);
+    const fixture = tinyTiff(entries, Buffer.from([123]), le);
+    const OriginalArray = Array;
+    let largest = 0;
+    globalThis.Array = new Proxy(OriginalArray, {
+      construct(target, args, newTarget) {
+        if (args.length === 1 && typeof args[0] === "number") largest = Math.max(largest, args[0]);
+        return Reflect.construct(target, args, newTarget);
+      },
+    });
+    try {
+      const png = PNG.sync.read(tiffToPng(fixture));
+      assert.deepEqual([...png.data], [123, 123, 123, 255]);
+      assert.ok(largest < 65536);
+    } finally { globalThis.Array = OriginalArray; }
+  }
+});
+
+test("TIFF rejects duplicate and oversized consumed metadata before decoding", () => {
+  const base: Array<[number, number, number[]]> = [
+    [256, 3, [1]], [257, 3, [1]], [258, 3, [8]], [262, 3, [1]], [273, 4, [8]],
+  ];
+  assert.throws(() => tiffToPng(tinyTiff([...base, [256, 3, [1]]], Buffer.from([0]))), /duplicate/);
+  assert.throws(() => tiffToPng(tinyTiff([...base, [279, 4, new Array(65536).fill(1)]], Buffer.from([0]))), /budget/);
+  assert.throws(() => tiffToPng(tinyTiff(base.map(e => e[0] === 256 ? [256, 4, [1, 1]] : e), Buffer.from([0]))), /scalar/);
+});
+
 test("tiffToPng keeps alpha from an RGBA extra sample", () => {
   const tif = tinyTiff(
     [
@@ -461,8 +493,8 @@ test("tiffToPng throws on garbage, out-of-scope layouts, and truncation", () => 
   const px = Buffer.from([255, 0, 0, 0, 0, 255]);
   assert.throws(() => tiffToPng(tinyTiff([...base, [322, 3, [16]], [323, 3, [16]]], px)), /tiled/);
   assert.throws(() => tiffToPng(tinyTiff([...base, [284, 3, [2]]], px)), /planar/);
-  assert.throws(() => tiffToPng(tinyTiff([...base, [259, 3, [6]]], px)), /compression/);
-  assert.throws(() => tiffToPng(tinyTiff([...base, [273, 4, [1 << 20]]], px)), /truncated/);
+  assert.throws(() => tiffToPng(tinyTiff([...base.filter(e => e[0] !== 259), [259, 3, [6]]], px)), /compression/);
+  assert.throws(() => tiffToPng(tinyTiff([...base.filter(e => e[0] !== 273), [273, 4, [1 << 20]]], px)), /truncated/);
 });
 
 test("toPng dispatches by mime", () => {
