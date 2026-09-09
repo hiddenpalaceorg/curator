@@ -7,10 +7,11 @@ jobs:
     name: rust core + cli + ffi
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - name: Cargo test + build (toolchain pinned by rust-toolchain.toml)
         run: |
+          node --test tests/build-inputs.test.mjs
           cargo test --workspace
           cargo build --workspace
 
@@ -18,11 +19,12 @@ jobs:
     name: windows GUI build (single exe)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           submodules: recursive   # ps2exe (the adapter freeze needs it)
       - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
         with:
+          version: "0.11.2"
           enable-cache: true
       - name: freeze adapter (PyInstaller one-file)
         working-directory: ps2exe-adapter
@@ -38,7 +40,7 @@ jobs:
           PRISM_ADAPTER_EXE: ${{ github.workspace }}\ps2exe-adapter\dist\prism-adapter.exe
         run: cargo build --release --manifest-path crates/prism-win/Cargo.toml
       - name: upload single exe
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: prism-win-${{ github.sha }}
           path: crates/prism-win/target/release/prism-win.exe
@@ -48,11 +50,12 @@ jobs:
     name: windows WinUI 3 app (folder artifact)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           submodules: recursive   # ps2exe (the adapter freeze needs it)
       - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
         with:
+          version: "0.11.2"
           enable-cache: true
       - name: freeze adapter (PyInstaller one-file)
         working-directory: ps2exe-adapter
@@ -64,13 +67,13 @@ jobs:
         run: cargo build -p prism-ffi --release
       - name: cache uniffi-bindgen-cs
         id: bindgen-cache
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ~/.cargo/bin/uniffi-bindgen-cs.exe
-          key: uniffi-bindgen-cs-v0.11.0+v0.31.0
-      - name: install uniffi-bindgen-cs (tag matches the uniffi 0.31 dep)
+          key: uniffi-bindgen-cs-e10ce410eb3a10cc19c7928b93ea8d84e038c034
+      - name: install uniffi-bindgen-cs (revision for uniffi 0.31)
         if: steps.bindgen-cache.outputs.cache-hit != 'true'
-        run: cargo install uniffi-bindgen-cs --git https://github.com/NordSecurity/uniffi-bindgen-cs --tag v0.11.0+v0.31.0 --locked
+        run: cargo install uniffi-bindgen-cs --git https://github.com/NordSecurity/uniffi-bindgen-cs --rev e10ce410eb3a10cc19c7928b93ea8d84e038c034 --locked
       - name: generate C# bindings from the built DLL
         run: uniffi-bindgen-cs --library target/release/prism_ffi.dll --out-dir windows/PrismWin/Generated
       - name: publish app (single self-extracting exe)
@@ -118,7 +121,7 @@ jobs:
         # readable disc volume; a loose folder of files has none).
         run: |
           $iso = Join-Path $env:RUNNER_TEMP "press-kit.iso"
-          uv run --with pycdlib --no-project python windows/make-sample-iso.py $iso
+          uv run --with pycdlib==1.14.0 --no-project python windows/make-sample-iso.py $iso
           $env:PRISM_DATA_DIR = Join-Path $env:RUNNER_TEMP "prism-shot-data"
           $env:PRISM_SHOT_DIR = Join-Path $env:RUNNER_TEMP "prism-shots"
           $env:PRISM_SHOT_OPEN = $iso
@@ -130,7 +133,7 @@ jobs:
           Copy-Item -Recurse $env:PRISM_SHOT_DIR windows/dist/shots
       - name: upload screenshots
         continue-on-error: true
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: PrismWin-screens-${{ github.sha }}
           path: windows/dist/shots
@@ -145,13 +148,13 @@ jobs:
           }
       - name: upload msbuild log on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: publish-log-${{ github.sha }}
           path: publish.log
           if-no-files-found: ignore
       - name: upload single exe
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: PrismWin-winui-${{ github.sha }}
           path: windows/dist/PrismWin/PrismWin.exe
@@ -161,15 +164,16 @@ jobs:
     name: macOS app build (.app artifact)
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           submodules: recursive   # ps2exe (the adapter freeze needs it)
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
         with:
+          version: "0.11.2"
           enable-cache: true
       - name: cache SwiftPM build
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: macos/.build
           # Invalidate when Swift sources, the package, or the FFI/core surface (which
@@ -185,7 +189,7 @@ jobs:
       - name: zip the bundle (ditto preserves the .app structure)
         run: ditto -c -k --keepParent macos/dist/Prism.app macos/dist/Prism-app.zip
       - name: upload app
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: Prism-macos-${{ github.sha }}
           path: macos/dist/Prism-app.zip
@@ -200,7 +204,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: dl
       - name: stage assets with random, unguessable names
@@ -260,8 +264,8 @@ jobs:
       run:
         working-directory: hp-web
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           cache: npm
@@ -295,8 +299,8 @@ jobs:
       PGUSER: postgres
       PGPASSWORD: postgres
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           cache: npm
@@ -313,15 +317,16 @@ jobs:
       run:
         working-directory: ps2exe-adapter
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           submodules: recursive   # ps2exe (the archive tests import its reader stack)
       - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
         with:
+          version: "0.11.2"
           enable-cache: true
       - name: pytest (ps2exe deps limited to the archive stack, pins match pyproject)
         run: >-
-          uv run --no-project --with numpy --with blake3==1.0.8 --with fastcdc==1.7.0
+          uv run --no-project --with numpy==2.2.6 --with blake3==1.0.8 --with fastcdc==1.7.0
           --with pycdlib==1.14.0 --with bitarray==3.8.1 --with psutil==7.2.2
           --with rarfile==4.2 --with libarchive-c==5.3 --with inflate64==1.0.4
-          --with pytest pytest tests/ -q
+          --with pytest==9.0.3 pytest tests/ -q
