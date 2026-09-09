@@ -14,9 +14,6 @@ use prism_core::{Event, ProgressObserver};
 
 use crate::progress::LoaderObserver;
 
-/// Upload chunk size — small enough to clear typical proxy body-size limits.
-const UPLOAD_CHUNK: usize = 4 * 1024 * 1024;
-
 /// How many asset blobs to upload at once.
 const PARALLEL_UPLOADS: usize = 32;
 
@@ -258,15 +255,16 @@ impl Client {
         path: &Path,
         report: &dyn Fn(usize),
     ) -> bool {
-        let Ok(bytes) = std::fs::read(path) else { return false };
+        let Ok(mut source) = prism_core::upload::UploadSource::open(path) else { return false };
+        let Ok(size) = usize::try_from(source.len()) else { return false };
         let mut offset: usize = 0;
         let mut reported: usize = 0;
         let mut last_staged: Option<usize> = None;
         let mut throttled = 0u32;
-        while offset < bytes.len() {
-            let end = (offset + UPLOAD_CHUNK).min(bytes.len());
+        while offset < size {
+            let Ok(chunk) = source.chunk(offset as u64) else { return false };
+            let end = offset + chunk.len();
             let url = format!("{assets_url}/{sha}?offset={offset}");
-            let chunk = &bytes[offset..end];
             let Ok((code, body)) = self.request(
                 "PUT",
                 &url,
@@ -280,8 +278,8 @@ impl Client {
                     let v = serde_json::from_str::<serde_json::Value>(&body).unwrap_or_default();
                     match v.get("status").and_then(|s| s.as_str()) {
                         Some("stored") | Some("exists") => {
-                            if bytes.len() > reported {
-                                report(bytes.len() - reported);
+                            if size > reported {
+                                report(size - reported);
                             }
                             return true;
                         }
