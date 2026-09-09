@@ -1,3 +1,4 @@
+import { readBody } from "@/lib/request-body";
 import type { NextRequest } from "next/server";
 import { getPool } from "@/lib/db";
 import { deriveQueryFeatures, semanticDoc } from "@/lib/fingerprint";
@@ -17,7 +18,9 @@ export async function POST(request: NextRequest) {
   if (!rateLimit(`similarity:${clientKey(request)}`, 30, 60_000)) {
     return Response.json({ error: "rate limit exceeded" }, { status: 429 });
   }
-  const text = await request.text();
+  const bytes = await readBody(request, MAX_BODY_BYTES);
+  if (bytes instanceof Response) return bytes;
+  const text = new TextDecoder().decode(bytes);
   if (text.length > MAX_BODY_BYTES) {
     return Response.json({ error: "request body too large" }, { status: 413 });
   }

@@ -1,3 +1,4 @@
+import { withBoundedBody } from "@/lib/request-body";
 import type { NextRequest } from "next/server";
 import { requireModerator } from "@/lib/auth";
 import { contributionTarget, revalidateBuildPages } from "@/lib/contrib";
@@ -12,7 +13,7 @@ export const dynamic = "force-dynamic";
 // moderator-only toggles marking a completeness category as not applicable
 // to this build (its 0 in the /builds columns stops rendering orange).
 // Omitted fields keep their stored value.
-export async function PATCH(request: NextRequest, ctx: { params: Promise<{ sha256: string }> }) {
+async function boundedPATCH(request: NextRequest, ctx: { params: Promise<{ sha256: string }> }) {
   const denied = await requireModerator(request);
   if (denied) return denied;
   const { sha256 } = await ctx.params;
@@ -51,3 +52,5 @@ export async function PATCH(request: NextRequest, ctx: { params: Promise<{ sha25
   await revalidateBuildPages(sha256, target.name);
   return Response.json({ sha256, ...saved });
 }
+
+export const PATCH = withBoundedBody(boundedPATCH);

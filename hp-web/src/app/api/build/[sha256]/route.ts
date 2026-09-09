@@ -1,3 +1,4 @@
+import { withBoundedBody } from "@/lib/request-body";
 import type { NextRequest } from "next/server";
 import { getPool } from "@/lib/db";
 import { deriveQueryFeatures } from "@/lib/fingerprint";
@@ -44,7 +45,7 @@ export async function GET(request: NextRequest, ctx: { params: Promise<{ sha256:
 // list/search/similar; `lotPrivate` hides/unhides the build's whole lot
 // (current and future members); `game` (+ optional `gameSystem`) names the
 // game the build belongs to (created if new; "" or null clears).
-export async function PATCH(request: NextRequest, ctx: { params: Promise<{ sha256: string }> }) {
+async function boundedPATCH(request: NextRequest, ctx: { params: Promise<{ sha256: string }> }) {
   const denied = await requireModerator(request);
   if (denied) return denied;
   const { sha256 } = await ctx.params;
@@ -171,3 +172,5 @@ export async function PATCH(request: NextRequest, ctx: { params: Promise<{ sha25
       : {}),
   });
 }
+
+export const PATCH = withBoundedBody(boundedPATCH);

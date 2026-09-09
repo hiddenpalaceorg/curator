@@ -20,6 +20,7 @@ import {
   withMediaSession,
 } from "@/lib/media";
 import { isSha256 } from "@/lib/validate";
+import { readBody } from "@/lib/request-body";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -77,7 +78,9 @@ export async function PUT(
   if (declared > MAX_CHUNK_BYTES) {
     return Response.json({ error: "chunk too large" }, { status: 413 });
   }
-  const chunk = Buffer.from(await request.arrayBuffer());
+  const bytes = await readBody(request, MAX_CHUNK_BYTES);
+  if (bytes instanceof Response) return bytes;
+  const chunk = Buffer.from(bytes);
 
   return withMediaSession(token, () => append(pool, sha256, token, target, chunk, offset));
 }

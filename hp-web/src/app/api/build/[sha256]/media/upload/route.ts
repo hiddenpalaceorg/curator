@@ -1,3 +1,4 @@
+import { withBoundedBody } from "@/lib/request-body";
 import type { NextRequest } from "next/server";
 import { getPool } from "@/lib/db";
 import { requireContributor } from "@/lib/contrib";
@@ -29,7 +30,7 @@ const CREATE_WINDOW_MS = 3600_000;
 // photos only and defaults to other. Returns { token }; the client PUTs chunks to
 // ./upload/<token>?offset=N until the claimed size is reached, at which point
 // the server sniffs, stores, and records the file (see the token route).
-export async function POST(request: NextRequest, ctx: { params: Promise<{ sha256: string }> }) {
+async function boundedPOST(request: NextRequest, ctx: { params: Promise<{ sha256: string }> }) {
   const { sha256 } = await ctx.params;
   if (!isSha256(sha256)) return Response.json({ error: "invalid sha256" }, { status: 400 });
 
@@ -89,3 +90,5 @@ export async function POST(request: NextRequest, ctx: { params: Promise<{ sha256
   await createMediaSession(token, { build: sha256, kind, filename, size, author: contributor.name, label });
   return Response.json({ token });
 }
+
+export const POST = withBoundedBody(boundedPOST);

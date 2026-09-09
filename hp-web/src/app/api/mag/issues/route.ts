@@ -1,3 +1,4 @@
+import { withBoundedBody } from "@/lib/request-body";
 import type { NextRequest } from "next/server";
 import { requireModerator } from "@/lib/auth";
 import { getPool } from "@/lib/db";
@@ -10,7 +11,7 @@ export const dynamic = "force-dynamic";
 // POST /api/mag/issues — upsert an issue by (magazine slug, issue slug),
 // moderator only. The magazine must already exist (POST /api/mag/magazines
 // first); a typo'd magazine slug must not silently mint a new magazine.
-export async function POST(request: NextRequest) {
+async function boundedPOST(request: NextRequest) {
   const denied = await requireModerator(request);
   if (denied) return denied;
   const body = await request.json().catch(() => null);
@@ -24,3 +25,5 @@ export async function POST(request: NextRequest) {
   const issue = await upsertIssue(pool, magazine.id, v.value);
   return Response.json({ issue: { ...issue, magazine_slug: magazine.slug } });
 }
+
+export const POST = withBoundedBody(boundedPOST);

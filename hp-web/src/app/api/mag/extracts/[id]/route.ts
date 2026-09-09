@@ -1,3 +1,5 @@
+import { withBoundedBody } from "@/lib/request-body";
+import { MAX_EXTRACT_BODY_BYTES } from "@/lib/mag/kinds";
 import type { NextRequest } from "next/server";
 import { getModerator, requireModerator } from "@/lib/auth";
 import { getPool } from "@/lib/db";
@@ -37,7 +39,7 @@ export async function GET(request: NextRequest, ctx: { params: Promise<{ id: str
 // PATCH /api/mag/extracts/<id> — moderator amendment. Body: { fields?,
 // regions?, note? }. Every change lands in extract_revision; a bbox change
 // resets the affected crops and re-kicks the crop job.
-export async function PATCH(request: NextRequest, ctx: { params: Promise<{ id: string }> }) {
+async function boundedPATCH(request: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const denied = await requireModerator(request);
   if (denied) return denied;
   const raw = (await ctx.params).id;
@@ -93,3 +95,5 @@ export async function PATCH(request: NextRequest, ctx: { params: Promise<{ id: s
   if (patch.regions) ensureIssueAssets(pool, updated.issue_id);
   return Response.json({ extract: updated });
 }
+
+export const PATCH = withBoundedBody(boundedPATCH, MAX_EXTRACT_BODY_BYTES);

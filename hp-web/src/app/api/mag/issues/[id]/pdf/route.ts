@@ -1,3 +1,4 @@
+import { withBoundedBody } from "@/lib/request-body";
 import type { NextRequest } from "next/server";
 import { requireModerator, getModerator } from "@/lib/auth";
 import { blobSize, openBlobStream } from "@/lib/blobstore";
@@ -17,7 +18,7 @@ function parseId(raw: string): number | null {
 // POST /api/mag/issues/<id>/pdf { size } -> { token }: open a chunked upload
 // session for the issue's source PDF (moderator only). Chunks go to
 // PUT /api/mag/issues/<id>/pdf/<token>?offset=N.
-export async function POST(request: NextRequest, ctx: { params: Promise<{ id: string }> }) {
+async function boundedPOST(request: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const denied = await requireModerator(request);
   if (denied) return denied;
   const id = parseId((await ctx.params).id);
@@ -62,3 +63,5 @@ export async function GET(request: NextRequest, ctx: { params: Promise<{ id: str
     "Content-Security-Policy": PDF_CSP,
   });
 }
+
+export const POST = withBoundedBody(boundedPOST);

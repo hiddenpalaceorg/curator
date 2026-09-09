@@ -1,3 +1,4 @@
+import { withBoundedBody } from "@/lib/request-body";
 import type { NextRequest } from "next/server";
 import { getPool } from "@/lib/db";
 import { bulkUpdateBuilds } from "@/lib/queries";
@@ -18,7 +19,7 @@ export const dynamic = "force-dynamic";
 // once (the mass-apply bar on the build tables). Semantics per field match
 // PATCH /api/build/<sha256>; unknown sha256s are skipped, the response
 // carries how many rows actually changed.
-export async function POST(request: NextRequest) {
+async function boundedPOST(request: NextRequest) {
   const denied = await requireModerator(request);
   if (denied) return denied;
 
@@ -87,3 +88,5 @@ export async function POST(request: NextRequest) {
     ...(fields.lot !== undefined ? { lot: fields.lot } : {}),
   });
 }
+
+export const POST = withBoundedBody(boundedPOST);

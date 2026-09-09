@@ -1,3 +1,4 @@
+import { withBoundedBody } from "@/lib/request-body";
 import type { NextRequest } from "next/server";
 import { getContributor, contributionTarget, revalidateBuildPages, type Contributor } from "@/lib/contrib";
 import { getPool } from "@/lib/db";
@@ -39,7 +40,7 @@ async function resolveNote(
 
 // PATCH /api/build/<sha256>/notes/<id> { body }: edit a note (author or
 // moderator), stamps edited_at.
-export async function PATCH(request: NextRequest, ctx: { params: Promise<{ sha256: string; id: string }> }) {
+async function boundedPATCH(request: NextRequest, ctx: { params: Promise<{ sha256: string; id: string }> }) {
   const r = await resolveNote(request, ctx);
   if (!r.ok) return r.response;
 
@@ -62,10 +63,13 @@ export async function PATCH(request: NextRequest, ctx: { params: Promise<{ sha25
 }
 
 // DELETE /api/build/<sha256>/notes/<id>: remove a note (author or moderator).
-export async function DELETE(request: NextRequest, ctx: { params: Promise<{ sha256: string; id: string }> }) {
+async function boundedDELETE(request: NextRequest, ctx: { params: Promise<{ sha256: string; id: string }> }) {
   const r = await resolveNote(request, ctx);
   if (!r.ok) return r.response;
   await deleteNote(getPool(), r.sha256, r.noteId);
   await revalidateBuildPages(r.sha256, r.name);
   return Response.json({ deleted: true });
 }
+
+export const PATCH = withBoundedBody(boundedPATCH);
+export const DELETE = withBoundedBody(boundedDELETE);

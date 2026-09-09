@@ -84,6 +84,9 @@ export const MAX_PERSON_LINKS = 50;
 export const MAX_SYSTEM_LINKS = 20;
 export const MAX_TAG_LINKS = 50;
 export const MAX_BATCH = 50;
+// Includes both texts, structured data, all bounded links, and worst-case
+// JSON Unicode escaping. Unknown/unbounded extra fields need not be accepted.
+export const MAX_EXTRACT_BODY_BYTES = 8 * 1024 * 1024;
 export const MAX_CLIENT_KEY_LEN = 200;
 
 export interface RegionInput {

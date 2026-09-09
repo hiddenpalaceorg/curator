@@ -1,3 +1,4 @@
+import { readBody } from "@/lib/request-body";
 import type { NextRequest } from "next/server";
 import { getPool } from "@/lib/db";
 import { enqueueSubmission, listSubmissions } from "@/lib/queries";
@@ -29,7 +30,9 @@ export async function POST(request: NextRequest) {
   if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) {
     return Response.json({ error: "request body too large" }, { status: 413 });
   }
-  const text = await request.text();
+  const bytes = await readBody(request, MAX_BODY_BYTES);
+  if (bytes instanceof Response) return bytes;
+  const text = new TextDecoder().decode(bytes);
   if (text.length > MAX_BODY_BYTES) {
     return Response.json({ error: "request body too large" }, { status: 413 });
   }

@@ -1,3 +1,4 @@
+import { withBoundedBody } from "@/lib/request-body";
 import type { NextRequest } from "next/server";
 import { requireContributor, revalidateBuildPages } from "@/lib/contrib";
 import { getPool } from "@/lib/db";
@@ -13,7 +14,7 @@ const NOTE_WINDOW_MS = 600_000;
 
 // POST /api/build/<sha256>/notes { body }: add one plain-text note, for any
 // logged-in wiki user who can see the build. Attributed to the wiki username.
-export async function POST(request: NextRequest, ctx: { params: Promise<{ sha256: string }> }) {
+async function boundedPOST(request: NextRequest, ctx: { params: Promise<{ sha256: string }> }) {
   const { sha256 } = await ctx.params;
   if (!isSha256(sha256)) return Response.json({ error: "invalid sha256" }, { status: 400 });
 
@@ -46,3 +47,5 @@ export async function POST(request: NextRequest, ctx: { params: Promise<{ sha256
   await revalidateBuildPages(sha256, target.name);
   return Response.json({ note });
 }
+
+export const POST = withBoundedBody(boundedPOST);
