@@ -86,6 +86,7 @@ const BLEND_KEYS: Record<string, string> = {
 };
 
 const MAX_PIXELS = 32_000_000;
+const MAX_DECODED_BYTES = 512 * 1024 * 1024;
 
 function view(bytes: Uint8Array): DataView {
   return new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
@@ -172,7 +173,17 @@ function cmykToRgba(
 }
 
 /** Parse an 8-bit CMYK PSD/PSB. Throws on anything it can't read exactly. */
-export function parseCmykPsd(bytes: Uint8Array): CmykPsd {
+export function parseCmykPsd(bytes: Uint8Array, maxDecodedBytes = MAX_DECODED_BYTES): CmykPsd {
+  if (!Number.isSafeInteger(maxDecodedBytes) || maxDecodedBytes <= 0 || maxDecodedBytes > MAX_DECODED_BYTES) {
+    throw new Error("invalid PSD decoded-byte limit");
+  }
+  let decodedBytes = 0;
+  const reserve = (size: number) => {
+    if (!Number.isSafeInteger(size) || size < 0 || size > maxDecodedBytes - decodedBytes) {
+      throw new Error("PSD decoded-byte budget exceeded");
+    }
+    decodedBytes += size;
+  };
   if (!isCmykPsd(bytes)) throw new Error("not an 8-bit CMYK PSD");
   const dv = view(bytes);
   const psb = dv.getUint16(4) === 2;
@@ -182,6 +193,8 @@ export function parseCmykPsd(bytes: Uint8Array): CmykPsd {
   if (width * height > MAX_PIXELS || width === 0 || height === 0) {
     throw new Error(`PSD too large: ${width}x${height}`);
   }
+  // Leave room for the caller's flattened frame and PNG/canvas output.
+  reserve(width * height * 8);
 
   let off = 26;
   off += 4 + dv.getUint32(off); // color mode data
@@ -269,9 +282,15 @@ export function parseCmykPsd(bytes: Uint8Array): CmykPsd {
     // Channel image data follows the records, in the same order.
     for (const rec of recs) {
       const planes = new Map<number, Uint8Array>();
+      const seen = new Set<number>();
       for (const ch of rec.channels) {
         if ((ch.id >= 0 && ch.id <= 3) || ch.id === -1) {
+          if (seen.has(ch.id)) throw new Error("duplicate PSD channel");
+          seen.add(ch.id);
           if (rec.rows > 0 && rec.cols > 0) {
+            // Outside the tolerant decode catch: exhausting the document
+            // budget must fail the whole file, not silently discard a layer.
+            reserve(rec.rows * rec.cols);
             try {
               planes.set(ch.id, decodeChannel(bytes, p, ch.len, rec.rows, rec.cols, psb));
             } catch {
@@ -282,6 +301,7 @@ export function parseCmykPsd(bytes: Uint8Array): CmykPsd {
         p += ch.len; // masks (-2/-3) and spot channels: skipped, not parsed
       }
       const hasInks = [0, 1, 2, 3].every((id) => planes.has(id));
+      if (hasInks) reserve(rec.rows * rec.cols * 4);
       layers.push({
         name: rec.name || "Layer",
         top: rec.top,
@@ -297,13 +317,16 @@ export function parseCmykPsd(bytes: Uint8Array): CmykPsd {
     }
   }
 
+  let compositePixels: Uint8ClampedArray | undefined;
   return {
     width,
     height,
     layers,
     composite: () => {
+      if (compositePixels) return compositePixels;
       const compression = dv.getUint16(imageAt);
       const plane = width * height;
+      reserve(plane * (compression === 1 ? 8 : 4));
       const planes = new Map<number, Uint8Array>();
       if (compression === 0) {
         for (let c = 0; c < 4; c++) {
@@ -331,7 +354,8 @@ export function parseCmykPsd(bytes: Uint8Array): CmykPsd {
       } else {
         throw new Error(`unsupported composite compression ${compression}`);
       }
-      return cmykToRgba(planes, plane, true);
+      compositePixels = cmykToRgba(planes, plane, true);
+      return compositePixels;
     },
   };
 }
