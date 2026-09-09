@@ -20,11 +20,13 @@ python3 works too when Pillow is installed.
 """
 
 import argparse
+from contextlib import contextmanager
 import os
 import re
 import shutil
 import subprocess
 import sys
+import tempfile
 
 try:
     from PIL import Image, ImageDraw, ImageFont
@@ -79,7 +81,17 @@ def find_ghostscript():
 def ps_string(path):
     return "(" + re.sub(r"([\\()])", r"\\\1", path) + ")"
 
+@contextmanager
+def ghostscript_workspace(pdf):
+    # Ghostscript treats permission paths as patterns and ':' as a list
+    # separator. Never grant permissions using an input-controlled filename.
+    with tempfile.TemporaryDirectory(prefix="magazine-render-") as work:
+        source = os.path.join(work, "input.pdf")
+        shutil.copyfile(pdf, source)
+        yield source, work
+
 def page_count(pdf, gs):
+    pdf = os.path.abspath(pdf)
     pdfinfo = shutil.which("pdfinfo")
     if pdfinfo:
         r = run([pdfinfo, pdf], timeout=120)
@@ -87,9 +99,10 @@ def page_count(pdf, gs):
         if m:
             return int(m.group(1))
     if gs:
-        script = f"{ps_string(pdf)} (r) file runpdfbegin pdfpagecount = quit"
-        for safety in ([f"--permit-file-read={pdf}"], ["-dNOSAFER"]):
-            r = run([gs, "-q", "-dNODISPLAY", *safety, "-c", script], timeout=300)
+        with ghostscript_workspace(pdf) as (source, _):
+            script = f"{ps_string(source)} (r) file runpdfbegin pdfpagecount = quit"
+            r = run([gs, "-q", "-dNODISPLAY", "-dSAFER", "-P-",
+                     f"--permit-file-read={source}", "-c", script], timeout=300)
             m = re.search(r"^\s*(\d+)\s*$", r.stdout, re.M)
             if r.returncode == 0 and m:
                 return int(m.group(1))
@@ -147,12 +160,16 @@ def render_pdftoppm(binary, pdf, pages, pages_dir, target):
 
 def render_ghostscript(binary, pdf, pages, pages_dir, target):
     need_pillow()  # gs renders at fixed dpi; Pillow normalizes the long edge
+    with ghostscript_workspace(pdf) as (source, work):
+        _render_ghostscript(binary, source, pages, pages_dir, target, work)
+
+def _render_ghostscript(binary, pdf, pages, pages_dir, target, work):
     for first, last in contiguous_runs(pages):
         note(f"ghostscript: pages {first}-{last}")
-        tmp = os.path.join(pages_dir, ".tmp-render")
+        tmp = os.path.join(work, "pages")
         shutil.rmtree(tmp, ignore_errors=True)
         os.makedirs(tmp)
-        r = run([binary, "-dBATCH", "-dNOPAUSE", "-dQUIET", "-dNOSAFER",
+        r = run([binary, "-dBATCH", "-dNOPAUSE", "-dQUIET", "-dSAFER", "-P-",
                  "-sDEVICE=jpeg", f"-dJPEGQ={JPEG_QUALITY}", f"-r{GS_RENDER_DPI}",
                  "-dTextAlphaBits=4", "-dGraphicsAlphaBits=4",
                  f"-dFirstPage={first}", f"-dLastPage={last}",
@@ -242,6 +259,9 @@ def main():
                    help="skip rendering; (re)draw grids from existing pages/*.jpg")
     p.add_argument("--pages", metavar="A-B", help="only this 1-based page range")
     args = p.parse_args()
+
+    args.pdf = os.path.abspath(args.pdf)
+    args.workdir = os.path.abspath(args.workdir)
 
     if not os.path.isfile(args.pdf):
         die(f"no such file: {args.pdf}")
