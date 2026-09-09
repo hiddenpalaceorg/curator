@@ -197,7 +197,7 @@ impl Analyzer {
         let chunk_signature = fingerprint::chunk_signature(&raw.files);
         let resemblance = fingerprint::resemblance_signature(&raw.files);
         let sidecar = fingerprint::chunk_sidecar(&raw.files);
-        let contents = fingerprint::build_tree(&raw.files);
+        let contents = fingerprint::build_tree(&raw.files)?;
 
         // Asset pass: pull browser-viewable files (images/audio/text ≤ 20MB) whole
         // and every other file's head snippet into the content-addressed store.
