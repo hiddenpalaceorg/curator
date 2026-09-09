@@ -6,11 +6,12 @@
 
 import { createHash } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
+import type { PagePolicyInput } from "./auth/native";
 import { diff3Merge } from "node-diff3";
 import type { Root } from "mdast";
 import { withTx } from "./db";
 import { extractPage, invalidationTags, type ExtractedObject, type Extraction } from "./extract";
-import { CubeConflictError, CubeValidationError, hasErrors, type Issue } from "./issues";
+import { CubeAuthorizationError, CubeConflictError, CubeValidationError, hasErrors, type Issue } from "./issues";
 import { parseDocument } from "./parse";
 import { checkQueries } from "./query-component";
 import type { Registry } from "./schema/index";
@@ -44,6 +45,9 @@ export type SaveInput = {
   timestamp?: Date;
   /** Import provenance: source MediaWiki revision id (unique when set). */
   mwRevId?: number;
+  /** Remote writes: authorize the locked current state before any mutation or
+   * conflict disclosure. Trusted local imports may omit this callback. */
+  authorize?: (page: PagePolicyInput & { exists: boolean; deleted: boolean }) => boolean | Promise<boolean>;
 };
 
 export type SaveResult = {
@@ -111,7 +115,7 @@ export async function savePage(pool: Pool, ctx: SaveContext, input: SaveInput): 
       }
     : undefined;
   if (
-    headRow?.content_sha256 === contentSha &&
+    !input.authorize && headRow?.content_sha256 === contentSha &&
     (input.baseRevId == null || input.baseRevId === headRow.current_rev_id)
   ) {
     return {
@@ -124,11 +128,11 @@ export async function savePage(pool: Pool, ctx: SaveContext, input: SaveInput): 
     };
   }
 
-  let doc = input.wikitextFallback ? null : parseAndValidate(ctx, page, content);
+  let doc = input.authorize || input.wikitextFallback ? null : parseAndValidate(ctx, page, content);
 
   return withTx(pool, async (client) => {
     let locked = await client.query(
-      `SELECT id, current_rev_id, deleted_at FROM cube_page WHERE ns = $1 AND slug = $2 FOR UPDATE`,
+      `SELECT id, current_rev_id, deleted_at, visibility, protection FROM cube_page WHERE ns = $1 AND slug = $2 FOR UPDATE`,
       [page.ns, page.slug],
     );
     if (locked.rows[0] === undefined) {
@@ -137,7 +141,7 @@ export async function savePage(pool: Pool, ctx: SaveContext, input: SaveInput): 
         [page.ns, page.slug, page.title],
       );
       locked = await client.query(
-        `SELECT id, current_rev_id, deleted_at FROM cube_page WHERE ns = $1 AND slug = $2 FOR UPDATE`,
+        `SELECT id, current_rev_id, deleted_at, visibility, protection FROM cube_page WHERE ns = $1 AND slug = $2 FOR UPDATE`,
         [page.ns, page.slug],
       );
     }
@@ -146,6 +150,18 @@ export async function savePage(pool: Pool, ctx: SaveContext, input: SaveInput): 
     // Recreating a soft-deleted page is a fresh create: no conflict check,
     // but the revision chain keeps its parent for history continuity.
     const wasDeleted = locked.rows[0].deleted_at !== null;
+    if (input.authorize) {
+      if (!(await input.authorize({
+        ns: page.ns, slug: page.slug, visibility: locked.rows[0].visibility,
+        protection: locked.rows[0].protection, exists: currentRevId !== null, deleted: wasDeleted,
+      }))) throw new CubeAuthorizationError();
+      if (!wasDeleted && headRow?.current_rev_id === currentRevId &&
+          headRow?.content_sha256 === contentSha &&
+          (input.baseRevId == null || input.baseRevId === currentRevId)) {
+        return { pageId, revId: currentRevId!, noop: true, merged: false, issues: [], invalidate: [] };
+      }
+      doc = input.wikitextFallback ? null : parseAndValidate(ctx, page, content);
+    }
     if (wasDeleted) {
       await client.query(`UPDATE cube_page SET deleted_at = NULL WHERE id = $1`, [pageId]);
     }

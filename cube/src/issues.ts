@@ -47,6 +47,13 @@ export class CubeValidationError extends Error {
   }
 }
 
+export class CubeAuthorizationError extends Error {
+  constructor() {
+    super("not allowed to write this page");
+    this.name = "CubeAuthorizationError";
+  }
+}
+
 export class CubeConflictError extends Error {
   currentRevId: number;
   currentContent: string;
