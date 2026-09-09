@@ -1102,7 +1102,7 @@ export interface SubmissionListItem {
   reviewed_at: string | null;
   name: string;
   system: string;
-  file_count: number;
+  file_count: number | null;
   /** Lot of the ingested build (accepted submissions only; set by moderators after accept). */
   lot: string | null;
   /** Front physical-media photo of the ingested build, when one is uploaded:
@@ -1122,7 +1122,7 @@ export async function listSubmissions(pool: Pool, status?: string, limit = 200):
     `SELECT q.sha256, q.nickname, q.status, q.kind, q.submitted_at, q.reviewed_at,
             q.record->'image'->>'name'         AS name,
             q.record->'info'->>'system'        AS system,
-            (q.record->'structural'->>'file_count')::bigint AS file_count,
+            q.record->'structural'->'file_count' AS file_count,
             b.lot,
             photo.sha256 AS photo_sha256, photo.content_type AS photo_content_type
      FROM submission_queue q
@@ -1142,6 +1142,10 @@ export async function listSubmissions(pool: Pool, status?: string, limit = 200):
   const rows = r.rows as Array<SubmissionListItem & { photo_content_type: string | null }>;
   return rows.map(({ photo_content_type, ...s }) => ({
     ...s,
+    // Old queue rows predate validation. One malformed count must not make
+    // the entire moderation queue unreadable.
+    file_count: typeof s.file_count === "number" && Number.isSafeInteger(s.file_count) && s.file_count >= 0
+      ? s.file_count : null,
     photo_url: s.photo_sha256 && photo_content_type ? mediaUrl(s.photo_sha256, photo_content_type) : null,
   }));
 }

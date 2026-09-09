@@ -38,6 +38,16 @@ export function validateBuildRecord(rec: unknown): ValidateResult {
     return { ok: false, error: "image.sha256 must be a 64-char lowercase hex string" };
   }
 
+  if (r.structural != null) {
+    if (typeof r.structural !== "object" || Array.isArray(r.structural)) {
+      return { ok: false, error: "structural must be an object" };
+    }
+    const count = (r.structural as Record<string, unknown>).file_count;
+    if (count != null && (typeof count !== "number" || !Number.isSafeInteger(count) || count < 0)) {
+      return { ok: false, error: "structural.file_count must be a nonnegative safe integer" };
+    }
+  }
+
   // Walk the contents tree with an explicit stack; bail early past the file cap.
   const contents = r.contents;
   if (contents !== undefined && !Array.isArray(contents)) {

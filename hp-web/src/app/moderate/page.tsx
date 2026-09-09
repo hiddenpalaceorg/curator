@@ -14,7 +14,7 @@ interface Submission {
   reviewed_at: string | null;
   name: string;
   system: string;
-  file_count: number;
+  file_count: number | null;
   lot: string | null;
   photo_sha256: string | null;
   photo_url: string | null;
