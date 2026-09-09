@@ -1,3 +1,4 @@
+import { withBoundedBody } from "@/lib/request-body";
 import type { NextRequest } from "next/server";
 import { getModerator, requireModerator } from "@/lib/auth";
 import { getPool } from "@/lib/db";
@@ -10,7 +11,7 @@ export const dynamic = "force-dynamic";
 // hide an extract from the public surface (or restore it). Restoring lands
 // on 'amended', not 'auto': a human vouched for it, so re-ingest must not
 // overwrite it anymore.
-export async function POST(request: NextRequest, ctx: { params: Promise<{ id: string }> }) {
+async function boundedPOST(request: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const denied = await requireModerator(request);
   if (denied) return denied;
   const raw = (await ctx.params).id;
@@ -30,3 +31,5 @@ export async function POST(request: NextRequest, ctx: { params: Promise<{ id: st
   if (!extract) return Response.json({ error: "not found" }, { status: 404 });
   return Response.json({ extract });
 }
+
+export const POST = withBoundedBody(boundedPOST);

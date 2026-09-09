@@ -32,6 +32,7 @@ import {
 } from "../moderation";
 import { CubeQueryError, type ObjectQuery } from "../query";
 import type { Cube } from "../index";
+import { boundedRequest, BodyLimitError } from "./body";
 
 type Method = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 export type CubeHandlers = Record<Method, (req: Request) => Promise<Response>>;
@@ -74,8 +75,14 @@ function issueError(issues: Issue[], status = 422): Response {
 export function createHandlers(cube: Cube): CubeHandlers {
   const handle = async (req: Request): Promise<Response> => {
     try {
+      const base = cube.config.site?.apiBasePath ?? "/api/cube";
+      const pathname = new URL(req.url).pathname;
+      const routePath = (pathname.startsWith(base) ? pathname.slice(base.length) : pathname).replace(/\/+$/, "") || "/";
+      // Media is streamed into its existing bounded spool after authorization.
+      if (!(req.method === "POST" && routePath === "/media")) req = await boundedRequest(req);
       return await route(cube, req);
     } catch (e) {
+      if (e instanceof BodyLimitError) return err("body_too_large", 413, e.message);
       if (e instanceof CubeValidationError) return issueError(e.issues);
       if (e instanceof CubeConflictError) {
         return json(
@@ -354,7 +361,7 @@ async function route(cube: Cube, req: Request): Promise<Response> {
     if (!name) return err("bad_request", 400, "name required");
     const result = await uploadMedia(cube.pool(), storage, {
       name,
-      body: new Uint8Array(await req.arrayBuffer()),
+      body: req.body ? Readable.fromWeb(req.body as import("node:stream/web").ReadableStream) : new Uint8Array(),
       contentType: req.headers.get("content-type") ?? undefined,
       uploader: authorOf(auth),
     });

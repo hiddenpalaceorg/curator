@@ -1,7 +1,8 @@
+import { withBoundedBody, readBody } from "@/lib/request-body";
 import type { NextRequest } from "next/server";
 import { requireModerator } from "@/lib/auth";
 import { getPool } from "@/lib/db";
-import { MAX_BATCH, validateExtractInput } from "@/lib/mag/kinds";
+import { MAX_BATCH, MAX_EXTRACT_BODY_BYTES, validateExtractInput } from "@/lib/mag/kinds";
 import {
   deleteAutoExtracts,
   getIssueById,
@@ -29,7 +30,10 @@ export async function POST(request: NextRequest, ctx: { params: Promise<{ id: st
   const issue = await getIssueById(pool, id);
   if (!issue) return Response.json({ error: "no such issue" }, { status: 404 });
 
-  const body = await request.json().catch(() => null);
+  const bytes = await readBody(request, MAX_BATCH * MAX_EXTRACT_BODY_BYTES);
+  if (bytes instanceof Response) return bytes;
+  let body: unknown;
+  try { body = JSON.parse(new TextDecoder().decode(bytes)); } catch { body = null; }
   const list = Array.isArray(body) ? body : Array.isArray((body as { extracts?: unknown[] })?.extracts) ? (body as { extracts: unknown[] }).extracts : null;
   if (!list) return Response.json({ error: "body must be an array of extracts" }, { status: 400 });
   if (list.length === 0) return Response.json({ results: [] });
@@ -62,7 +66,7 @@ export async function POST(request: NextRequest, ctx: { params: Promise<{ id: st
 // DELETE /api/mag/issues/<id>/extracts?only=auto — reset for re-ingest.
 // The only=auto parameter is required on purpose: the route that deletes
 // must say out loud that it cannot touch moderated rows.
-export async function DELETE(request: NextRequest, ctx: { params: Promise<{ id: string }> }) {
+async function boundedDELETE(request: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const denied = await requireModerator(request);
   if (denied) return denied;
   const raw = (await ctx.params).id;
@@ -73,3 +77,5 @@ export async function DELETE(request: NextRequest, ctx: { params: Promise<{ id: 
   const deleted = await deleteAutoExtracts(getPool(), parseInt(raw, 10));
   return Response.json({ deleted });
 }
+
+export const DELETE = withBoundedBody(boundedDELETE);

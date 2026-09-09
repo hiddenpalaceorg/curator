@@ -1,6 +1,7 @@
 import fsp from "node:fs/promises";
 import type { NextRequest } from "next/server";
 import { requireModerator } from "@/lib/auth";
+import { readBody } from "@/lib/request-body";
 import { storeBlobFromFile } from "@/lib/blobstore";
 import { getPool } from "@/lib/db";
 import { hashFile, withMediaSession } from "@/lib/media";
@@ -45,7 +46,9 @@ export async function PUT(request: NextRequest, ctx: { params: Promise<{ id: str
 
   const declared = Number(request.headers.get("content-length") ?? "0");
   if (declared > PDF_MAX_CHUNK) return Response.json({ error: "chunk too large" }, { status: 413 });
-  const chunk = Buffer.from(await request.arrayBuffer());
+  const bytes = await readBody(request, PDF_MAX_CHUNK);
+  if (bytes instanceof Response) return bytes;
+  const chunk = Buffer.from(bytes);
 
   return withMediaSession(`magpdf-${token}`, () => append(id, token, chunk, offset));
 }

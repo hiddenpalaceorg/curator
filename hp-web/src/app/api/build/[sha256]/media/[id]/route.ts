@@ -1,3 +1,4 @@
+import { withBoundedBody } from "@/lib/request-body";
 import type { NextRequest } from "next/server";
 import {
   getContributor,
@@ -48,7 +49,7 @@ async function requireOwnMedia(
 
 // PATCH /api/build/<sha256>/media/<id> { label }: relabel one physical photo
 // (front/back/other), by its own author or a moderator.
-export async function PATCH(request: NextRequest, ctx: { params: Promise<{ sha256: string; id: string }> }) {
+async function boundedPATCH(request: NextRequest, ctx: { params: Promise<{ sha256: string; id: string }> }) {
   const { sha256, id } = await ctx.params;
   const gate = await requireOwnMedia(request, sha256, id);
   if (!gate.ok) return gate.response;
@@ -75,7 +76,7 @@ export async function PATCH(request: NextRequest, ctx: { params: Promise<{ sha25
 // DELETE /api/build/<sha256>/media/<id>: remove one media entry, by its own
 // author or a moderator. The blob stays in the store (content-addressed and
 // possibly shared); only the record goes.
-export async function DELETE(request: NextRequest, ctx: { params: Promise<{ sha256: string; id: string }> }) {
+async function boundedDELETE(request: NextRequest, ctx: { params: Promise<{ sha256: string; id: string }> }) {
   const { sha256, id } = await ctx.params;
   const gate = await requireOwnMedia(request, sha256, id);
   if (!gate.ok) return gate.response;
@@ -84,3 +85,6 @@ export async function DELETE(request: NextRequest, ctx: { params: Promise<{ sha2
   await revalidateBuildPages(sha256, gate.target.name);
   return Response.json({ deleted: true });
 }
+
+export const PATCH = withBoundedBody(boundedPATCH);
+export const DELETE = withBoundedBody(boundedDELETE);

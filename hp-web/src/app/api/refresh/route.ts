@@ -1,3 +1,4 @@
+import { withBoundedBody } from "@/lib/request-body";
 import { timingSafeEqual } from "node:crypto";
 import { getPool } from "@/lib/db";
 import {
@@ -28,7 +29,7 @@ export const runtime = "nodejs";
 // Gated by REFRESH_TOKEN from the environment (x-refresh-token header) and
 // disabled when the variable is unset. A request that is itself a mirror
 // (PEER_HEADER) is not mirrored onward, so two slots cannot ping-pong.
-export async function POST(request: Request) {
+async function boundedPOST(request: Request) {
   const token = process.env.REFRESH_TOKEN;
   if (!token) return Response.json({ error: "not found" }, { status: 404 });
   const given = Buffer.from(request.headers.get("x-refresh-token") ?? "");
@@ -72,3 +73,5 @@ export async function POST(request: Request) {
   revalidateEverywhere(paths, tags, { mirror: request.headers.get(PEER_HEADER) !== "1" });
   return Response.json({ refreshed, revalidated: paths.size });
 }
+
+export const POST = withBoundedBody(boundedPOST);

@@ -1,3 +1,4 @@
+import { withBoundedBody } from "@/lib/request-body";
 import type { NextRequest } from "next/server";
 import { requireModerator } from "@/lib/auth";
 import { getPool } from "@/lib/db";
@@ -11,7 +12,7 @@ export const dynamic = "force-dynamic";
 // tooling calls this before the first issue of a magazine). Optional fields
 // left out keep their stored values, so a later ingest can't blank out a
 // moderator's edits.
-export async function POST(request: NextRequest) {
+async function boundedPOST(request: NextRequest) {
   const denied = await requireModerator(request);
   if (denied) return denied;
   const body = await request.json().catch(() => null);
@@ -20,3 +21,5 @@ export async function POST(request: NextRequest) {
   const magazine = await upsertMagazine(getPool(), v.value);
   return Response.json({ magazine });
 }
+
+export const POST = withBoundedBody(boundedPOST);

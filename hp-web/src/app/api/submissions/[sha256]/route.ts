@@ -1,3 +1,4 @@
+import { withBoundedBody } from "@/lib/request-body";
 import type { NextRequest } from "next/server";
 import { getPool } from "@/lib/db";
 import { submissionStatus, setSubmissionStatus } from "@/lib/queries";
@@ -22,7 +23,7 @@ export async function GET(_request: NextRequest, ctx: { params: Promise<{ sha256
 
 // POST /api/submissions/<sha256> { action: "accept" | "reject" } — moderate.
 // Accept ingests the stored record into the library, then marks it accepted.
-export async function POST(request: NextRequest, ctx: { params: Promise<{ sha256: string }> }) {
+async function boundedPOST(request: NextRequest, ctx: { params: Promise<{ sha256: string }> }) {
   const denied = await requireModerator(request);
   if (denied) return denied;
   const { sha256 } = await ctx.params;
@@ -117,3 +118,5 @@ export async function POST(request: NextRequest, ctx: { params: Promise<{ sha256
   revalidateEverywhere([canonical, `${canonical}/assets`, `/builds/${sha256}`]);
   return Response.json({ sha256, status: "accepted", kind });
 }
+
+export const POST = withBoundedBody(boundedPOST);
