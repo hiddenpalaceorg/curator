@@ -10,8 +10,8 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import type { CubeUser } from "../auth/native";
-import { CubeConflictError, CubeValidationError } from "../issues";
+import { defaultCan, type CubeUser } from "../auth/native";
+import { CubeAuthorizationError, CubeConflictError, CubeValidationError } from "../issues";
 import { CubeQueryError } from "../query";
 import type { Cube } from "../index";
 
@@ -28,7 +28,7 @@ function text(value: unknown): { content: { type: "text"; text: string }[] } {
 
 export function createCubeMcpServer(cube: Cube, opts: McpOptions = {}): McpServer {
   const server = new McpServer({ name: "cube", version: "0.1.0" });
-  const allowWrites = opts.allowWrites ?? opts.user != null;
+  const allowWrites = opts.user != null && (opts.allowWrites ?? true);
   const author = opts.user ? { id: opts.user.id, name: opts.user.name } : { id: null, name: "mcp-agent" };
 
   server.registerTool(
@@ -158,11 +158,18 @@ export function createCubeMcpServer(cube: Cube, opts: McpOptions = {}): McpServe
           baseRevId: baseRevision ?? null,
           author,
           comment: comment ?? "",
+          authorize: async (page) => {
+            const can = (action: "edit" | "create" | "delete") => cube.config.auth?.can
+              ? cube.config.auth.can(opts.user ?? null, action, page)
+              : defaultCan(opts.user ?? null, action, page);
+            return await can(page.exists ? "edit" : "create") && (!page.deleted || await can("delete"));
+          },
         });
         return text({ revision: result.revId, noop: result.noop, merged: result.merged, warnings: result.issues });
       } catch (e) {
         // Line-accurate issues as tool results so the model can fix and retry.
         if (e instanceof CubeValidationError) return text({ validationErrors: e.issues });
+        if (e instanceof CubeAuthorizationError) return text({ error: "forbidden" });
         if (e instanceof CubeConflictError) {
           return text({ conflict: { head: e.currentRevId, headContent: e.currentContent } });
         }
