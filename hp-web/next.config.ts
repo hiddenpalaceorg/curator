@@ -15,6 +15,9 @@ const SECURITY_HEADERS = [
 ];
 
 const nextConfig: NextConfig = {
+  // The app uses plain img and its own thumbnails. The generic optimizer
+  // caches local responses publicly, bypassing magazine visibility changes.
+  images: { unoptimized: true },
   // Which build directory this process uses. Production serves the app from
   // two slots off one checkout (.next-a and .next-b, see deploy/slots.sh), so
   // a deploy can rebuild and swap one while the other keeps serving; each slot

@@ -45,11 +45,11 @@ test("jpegSize reads SOF dimensions and rejects non-JPEGs", () => {
   assert.equal(jpegSize(Buffer.from([0x89, 0x50, 0x4e, 0x47])), null);
 });
 
-test("magImageUrl prefers the public gateway and falls back to the app route", () => {
+test("magImageUrl always uses the authorized app route", () => {
   const saved = process.env.ASSET_PUBLIC_BASE;
   try {
     process.env.ASSET_PUBLIC_BASE = "https://prism.example.org/";
-    assert.equal(magImageUrl("ab".repeat(32)), `https://prism.example.org/mag/ab/${"ab".repeat(32)}`);
+    assert.equal(magImageUrl("ab".repeat(32)), `/api/mag/blob/${"ab".repeat(32)}`);
     delete process.env.ASSET_PUBLIC_BASE;
     assert.equal(magImageUrl("ab".repeat(32)), `/api/mag/blob/${"ab".repeat(32)}`);
   } finally {

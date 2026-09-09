@@ -2,9 +2,12 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import type { NextRequest } from "next/server";
 import { ensurePhotoScale, isPhotoScaleWidth } from "@/lib/ffmpeg";
-import { IMMUTABLE_CACHE, SANDBOX_CSP, streamResponse } from "@/lib/http";
+import { SANDBOX_CSP, streamResponse } from "@/lib/http";
 import { MAG_NS } from "@/lib/mag/store";
 import { isSha256 } from "@/lib/validate";
+import { getModerator } from "@/lib/auth";
+import { getPool } from "@/lib/db";
+import { canReadMagImage, MAG_IMAGE_HEADERS } from "@/lib/mag/access";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -15,13 +18,15 @@ export const dynamic = "force-dynamic";
 export async function GET(request: NextRequest, ctx: { params: Promise<{ sha256: string }> }) {
   const { sha256 } = await ctx.params;
   if (!isSha256(sha256)) return Response.json({ error: "invalid sha256" }, { status: 400 });
+  if (!(await canReadMagImage(getPool(), sha256, !!(await getModerator(request)))))
+    return Response.json({ error: "not found" }, { status: 404, headers: MAG_IMAGE_HEADERS });
   const wParam = request.nextUrl.searchParams.get("w");
   const width = wParam === null ? 500 : Number(wParam);
   if (!isPhotoScaleWidth(width)) return Response.json({ error: "w must be 500 or 1000" }, { status: 400 });
 
   const etag = `"${sha256}-magthumb-${width}"`;
   if (request.headers.get("if-none-match") === etag) {
-    return new Response(null, { status: 304, headers: { "Cache-Control": IMMUTABLE_CACHE, ETag: etag } });
+    return new Response(null, { status: 304, headers: { ...MAG_IMAGE_HEADERS, ETag: etag } });
   }
 
   let scaled: string;
@@ -29,12 +34,12 @@ export async function GET(request: NextRequest, ctx: { params: Promise<{ sha256:
     scaled = await ensurePhotoScale(sha256, MAG_NS, width);
   } catch {
     // No usable ffmpeg or missing blob — the original still renders.
-    return Response.redirect(new URL(`/api/mag/blob/${sha256}`, request.url), 307);
+    return new Response(null, { status: 307, headers: { ...MAG_IMAGE_HEADERS, Location: `/api/mag/blob/${sha256}` } });
   }
   const stat = await fsp.stat(scaled);
   return streamResponse(fs.createReadStream(scaled), stat.size, null, {
     "Content-Type": "image/jpeg",
-    "Cache-Control": IMMUTABLE_CACHE,
+    ...MAG_IMAGE_HEADERS,
     ETag: etag,
     "X-Content-Type-Options": "nosniff",
     "Content-Security-Policy": SANDBOX_CSP,

@@ -11,6 +11,7 @@ import {
   type AmendPatch,
 } from "@/lib/mag/queries";
 import { ensureIssueAssets } from "@/lib/mag/store";
+import { MAG_IMAGE_HEADERS } from "@/lib/mag/access";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -23,15 +24,15 @@ export async function GET(request: NextRequest, ctx: { params: Promise<{ id: str
   const raw = (await ctx.params).id;
   if (!/^\d{1,10}$/.test(raw)) return Response.json({ error: "invalid extract id" }, { status: 400 });
   const pool = getPool();
-  const extract = await getExtract(pool, parseInt(raw, 10));
-  if (!extract) return Response.json({ error: "not found" }, { status: 404 });
   const mod = await getModerator(request);
+  const extract = await getExtract(pool, parseInt(raw, 10), !!mod);
+  if (!extract) return Response.json({ error: "not found" }, { status: 404 });
   if (extract.status === "rejected" && !mod) return Response.json({ error: "not found" }, { status: 404 });
   if (mod && request.nextUrl.searchParams.get("revisions") === "1") {
     const revisions = await listExtractRevisions(pool, extract.id);
-    return Response.json({ extract, revisions });
+    return Response.json({ extract, revisions }, { headers: MAG_IMAGE_HEADERS });
   }
-  return Response.json({ extract });
+  return Response.json({ extract }, { headers: MAG_IMAGE_HEADERS });
 }
 
 // PATCH /api/mag/extracts/<id> — moderator amendment. Body: { fields?,

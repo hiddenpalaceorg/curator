@@ -51,11 +51,8 @@ const CROP_TIMEOUT_MS = 60_000;
  *  boxes run tight, and a hair of margin keeps descenders and frames whole. */
 const CROP_PAD = 0.01;
 
-/** Public URL for a magazine image blob (page render or crop): the bucket
- *  gateway when configured, else the app route. Same contract as mediaUrl. */
+/** Always pass through association-aware authorization, including crops. */
 export function magImageUrl(sha256: string): string {
-  const base = process.env.ASSET_PUBLIC_BASE;
-  if (base) return `${base.replace(/\/+$/, "")}/mag/${sha256.slice(0, 2)}/${sha256}`;
   return `/api/mag/blob/${sha256}`;
 }
 

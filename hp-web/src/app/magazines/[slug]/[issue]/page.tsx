@@ -49,13 +49,13 @@ export default async function IssuePage({ params }: Params) {
   const moderator = !!(await getModeratorFromHeaders(await headers()));
   const [pages, extracts] = await Promise.all([
     listIssuePages(pool, issue.id),
-    getIssueExtracts(pool, issue.id, moderator),
+    getIssueExtracts(pool, issue.id, moderator, moderator),
   ]);
 
   const pageItems: IssuePageItem[] = pages.map((p) => ({
     pdf_index: p.pdf_index,
     printed_label: p.printed_label,
-    image_sha256: p.image_sha256,
+    image_sha256: issue.pages_public || moderator ? p.image_sha256 : null,
     width: p.width,
     height: p.height,
   }));
@@ -89,11 +89,12 @@ export default async function IssuePage({ params }: Params) {
   });
 
   const supplements = issue.supplements.filter((s) => s && typeof s.title === "string");
+  const renderedPages = new Set(pages.filter((p) => p.image_sha256).map((p) => p.pdf_index));
   const rendering =
     !!issue.pdf_sha256 &&
     (pages.length === 0 ||
       (issue.page_count !== null && pages.filter((p) => p.image_sha256).length < issue.page_count) ||
-      extracts.some((e) => e.regions.some((r) => !r.crop_sha256 && r.page_sha256)));
+      extracts.some((e) => e.regions.some((r) => !r.crop_sha256 && renderedPages.has(r.pdf_index))));
 
   return (
     <main className="mx-auto max-w-none px-4 py-10 sm:px-8">
