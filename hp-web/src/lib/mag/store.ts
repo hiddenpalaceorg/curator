@@ -23,6 +23,7 @@ import type { Pool } from "pg";
 import { storeBlobFromFile, withBlobFile } from "../blobstore";
 import { hashFile } from "../media";
 import { gsAvailable } from "../gs";
+import { conversions, ConversionBusy } from "../conversion-queue";
 
 const execFileP = promisify(execFile);
 
@@ -251,9 +252,9 @@ export function ensureIssueAssets(pool: Pool, issueId: number): Promise<void> {
   let job = issueJobs.get(issueId);
   if (!job) {
     issueJobErrors.delete(issueId);
-    job = runIssueAssets(pool, issueId)
+    job = conversions.run(`issue:${issueId}`, () => runIssueAssets(pool, issueId))
       .catch((e) => {
-        issueJobErrors.set(issueId, e instanceof Error ? e.message : String(e));
+        if (!(e instanceof ConversionBusy)) issueJobErrors.set(issueId, e instanceof Error ? e.message : String(e));
         throw e;
       })
       .finally(() => issueJobs.delete(issueId));

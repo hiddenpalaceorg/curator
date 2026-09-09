@@ -9,6 +9,7 @@
 import fsp from "node:fs/promises";
 import { ImageResponse } from "next/og";
 import { readBlob } from "@/lib/blobstore";
+import { ConversionBusy, conversions, socialPreviewResponse } from "@/lib/conversion-queue";
 import {
   buildOgObjectFit,
   selectBuildOgImages,
@@ -46,12 +47,32 @@ async function loadMediaThumbnail(sha256: string): Promise<string | null> {
   try {
     const base = process.env.SITE_URL ?? "https://hiddenpalace.org";
     const url = new URL(`/api/media/${sha256}/thumb?w=1000`, base);
-    const response = await fetch(url, { cache: "force-cache" });
+    const response = await fetch(url, { cache: "force-cache", signal: AbortSignal.timeout(120_000) });
     const contentType = response.headers.get("content-type");
-    if (!response.ok || !contentType?.startsWith("image/")) return null;
-    const bytes = Buffer.from(await response.arrayBuffer());
-    return `data:${contentType};base64,${bytes.toString("base64")}`;
-  } catch {
+    try {
+      if (response.status === 503) throw new ConversionBusy();
+      if (!response.ok || !contentType?.startsWith("image/") || !response.body) return null;
+      const chunks: Uint8Array[] = [];
+      let length = 0;
+      const reader = response.body.getReader();
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          length += value.length;
+          if (length > MAX_SHOT_BYTES) return null;
+          chunks.push(value);
+        }
+      } finally {
+        await reader.cancel().catch(() => {});
+        reader.releaseLock();
+      }
+      return `data:${contentType};base64,${Buffer.concat(chunks).toString("base64")}`;
+    } finally {
+      await response.body?.cancel().catch(() => {});
+    }
+  } catch (error) {
+    if (error instanceof ConversionBusy) throw error;
     return null;
   }
 }
@@ -70,7 +91,8 @@ async function loadMediaImage(row: MediaImageRow): Promise<string | null> {
     if (bytes !== null) {
       return `data:${row.content_type};base64,${bytes.toString("base64")}`;
     }
-  } catch {
+  } catch (error) {
+    if (error instanceof ConversionBusy) throw error;
     // Fall through to the public thumbnail path.
   }
   return loadMediaThumbnail(row.sha256);
@@ -120,16 +142,18 @@ async function findAssetPictures(sha256: string, limit: number): Promise<string[
   const images: string[] = [];
   for (const row of r.rows as Array<{ sha256: string; mime: string }>) {
     try {
-      const bytes = await readBlob(row.sha256);
-      if (bytes === null) continue;
-      // satori can't decode BMP or TGA — hand it PNG bytes instead.
-      if (pngConvertible(row.mime)) {
-        images.push(`data:image/png;base64,${toPng(row.mime, bytes).toString("base64")}`);
-      } else {
-        images.push(`data:${row.mime};base64,${bytes.toString("base64")}`);
-      }
+      const image = await conversions.run(`og:${row.sha256}:${row.mime}`, async () => {
+        const bytes = await readBlob(row.sha256);
+        if (bytes === null) return null;
+        return pngConvertible(row.mime)
+          ? `data:image/png;base64,${toPng(row.mime, bytes).toString("base64")}`
+          : `data:${row.mime};base64,${bytes.toString("base64")}`;
+      });
+      if (image === null) continue;
+      images.push(image);
       if (images.length === limit) break;
-    } catch {
+    } catch (error) {
+      if (error instanceof ConversionBusy) throw error;
       continue;
     }
   }
@@ -266,12 +290,9 @@ function Card({
 
 // Materialize the PNG so satori failures (e.g. an undecodable blob) are
 // catchable — then retry without images instead of 500ing the unfurl.
-async function render(meta: BuildMetaRow, shots: string[], mediaCount: number): Promise<Response> {
+async function render(meta: BuildMetaRow, shots: string[], mediaCount: number): Promise<ArrayBuffer> {
   const img = new ImageResponse(<Card meta={meta} shots={shots} mediaCount={mediaCount} />, size);
-  const buf = await img.arrayBuffer();
-  return new Response(buf, {
-    headers: { "Content-Type": contentType, "Cache-Control": "public, max-age=3600" },
-  });
+  return img.arrayBuffer();
 }
 
 export default async function OgImage({ params }: { params: Promise<{ buildId: string }> }) {
@@ -283,13 +304,15 @@ export default async function OgImage({ params }: { params: Promise<{ buildId: s
   const meta = resolved && (await getBuildMeta(pool, resolved.sha256));
   if (!meta) return new Response("not found", { status: 404 });
 
-  const media = await findMediaImages(meta.sha256);
-  const mediaImages = selectBuildOgImages(media, []);
-  const assets = await findAssetPictures(meta.sha256, 3 - mediaImages.length);
-  const shots = selectBuildOgImages(media, assets);
-  try {
-    return await render(meta, shots, mediaImages.length);
-  } catch {
-    return await render(meta, [], 0);
-  }
+  return socialPreviewResponse(`build:${meta.sha256}`, async () => {
+    const media = await findMediaImages(meta.sha256);
+    const mediaImages = selectBuildOgImages(media, []);
+    const assets = await findAssetPictures(meta.sha256, 3 - mediaImages.length);
+    const shots = selectBuildOgImages(media, assets);
+    try {
+      return await render(meta, shots, mediaImages.length);
+    } catch {
+      return render(meta, [], 0);
+    }
+  });
 }

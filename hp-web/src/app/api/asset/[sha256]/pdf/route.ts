@@ -4,6 +4,7 @@ import { readBlob } from "@/lib/blobstore";
 import { gsAvailable, gsToPdf, pdfConvertible } from "@/lib/gs";
 import { IMMUTABLE_CACHE, PDF_CSP, contentDisposition } from "@/lib/http";
 import { isSha256 } from "@/lib/validate";
+import { conversions, conversionBusyResponse } from "@/lib/conversion-queue";
 
 export const runtime = "nodejs";
 
@@ -29,17 +30,18 @@ export async function GET(_request: NextRequest, ctx: { params: Promise<{ sha256
     return Response.json({ error: `no PDF conversion for ${meta.mime}` }, { status: 415 });
   }
 
-  const bytes = await readBlob(sha256);
-  if (bytes === null) {
-    return Response.json({ error: "asset bytes not in store" }, { status: 404 });
-  }
-
-  let pdf: Buffer;
+  let pdf: Buffer | null;
   try {
-    pdf = await gsToPdf(bytes);
-  } catch {
+    pdf = await conversions.run(`pdf:${sha256}`, async () => {
+      const bytes = await readBlob(sha256);
+      return bytes === null ? null : gsToPdf(bytes);
+    });
+  } catch (error) {
+    const busy = conversionBusyResponse(error);
+    if (busy) return busy;
     return Response.json({ error: "unconvertible document" }, { status: 415 });
   }
+  if (pdf === null) return Response.json({ error: "asset bytes not in store" }, { status: 404 });
 
   const base = (meta.path.split("/").pop() || sha256).replace(/\.[^.]*$/, "");
   return new Response(new Uint8Array(pdf), {

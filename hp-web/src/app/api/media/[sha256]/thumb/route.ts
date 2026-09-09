@@ -3,6 +3,7 @@ import fsp from "node:fs/promises";
 import type { NextRequest } from "next/server";
 import { getPool } from "@/lib/db";
 import { ensurePhotoScale, isPhotoScaleWidth } from "@/lib/ffmpeg";
+import { conversionBusyResponse } from "@/lib/conversion-queue";
 import { IMMUTABLE_CACHE, SANDBOX_CSP, streamResponse } from "@/lib/http";
 import { MEDIA_NS, mediaContentType, mediaUrl } from "@/lib/media";
 import { isSha256 } from "@/lib/validate";
@@ -39,7 +40,9 @@ export async function GET(request: NextRequest, ctx: { params: Promise<{ sha256:
   let scaled: string;
   try {
     scaled = await ensurePhotoScale(sha256, MEDIA_NS, width);
-  } catch {
+  } catch (error) {
+    const busy = conversionBusyResponse(error);
+    if (busy) return busy;
     // No usable ffmpeg or undecodable bytes — the original still renders.
     return Response.redirect(new URL(mediaUrl(sha256, contentType), request.url), 307);
   }
