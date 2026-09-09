@@ -1,6 +1,6 @@
 import type { Pool } from "pg";
 import fsp from "node:fs/promises";
-import { assetBlobPath, assetStagingPath, blobSize, s3Enabled, storeIdentity } from "./blobstore";
+import { assetBlobPath, assetStagingPath, blobSize, reapStaleAssetStaging, s3Enabled, storeIdentity } from "./blobstore";
 
 const totalSql = `SELECT COALESCE(sum(q.bytes), 0)::text AS bytes FROM upload_quota q
   WHERE NOT EXISTS (SELECT 1 FROM build_asset a WHERE a.sha256=q.sha256 AND a.size=q.bytes)`;
@@ -23,10 +23,17 @@ export async function withUploadQuota(pool: Pool, sha: string, claimed: number, 
         await c.query("ROLLBACK");
         return Response.json({ error: "upload quota inventory required" }, { status: 503 });
       }
-      const existing = await c.query("SELECT bytes::text FROM upload_quota WHERE sha256=$1", [sha]);
+      const existing = await c.query("SELECT bytes::text,active FROM upload_quota WHERE sha256=$1", [sha]);
+      if (existing.rows[0]?.active) {
+        await c.query("ROLLBACK");
+        return Response.json({ error: "asset upload busy", retryAfter: 1 }, { status: 429, headers: { "Retry-After": "1" } });
+      }
       const total = BigInt((await c.query(totalSql)).rows[0].bytes);
       const old = BigInt(existing.rows[0]?.bytes ?? "0");
-      const wanted = BigInt(claimed) > old ? BigInt(claimed) : old;
+      // S3 upload briefly holds both a staged and a final copy. Local storage
+      // uses a same-filesystem rename. Reserve the peak before reading input.
+      const peak = BigInt(claimed) * (s3Enabled() ? 2n : 1n);
+      const wanted = peak > old ? peak : old;
       const oldApproved = old > 0n && (await c.query("SELECT 1 FROM build_asset WHERE sha256=$1 AND size=$2 LIMIT 1", [sha, old.toString()])).rowCount;
       const wantedApproved = (await c.query("SELECT 1 FROM build_asset WHERE sha256=$1 AND size=$2 LIMIT 1", [sha, wanted.toString()])).rowCount;
       const nextTotal = total - (oldApproved ? 0n : old) + (wantedApproved ? 0n : wanted);
@@ -35,7 +42,7 @@ export async function withUploadQuota(pool: Pool, sha: string, claimed: number, 
         return Response.json({ error: "pending upload quota exceeded" }, { status: 507 });
       }
       await c.query(`INSERT INTO upload_quota(sha256,bytes,active) VALUES ($1,$2,1)
-        ON CONFLICT (sha256) DO UPDATE SET bytes=GREATEST(upload_quota.bytes,excluded.bytes),active=upload_quota.active+1,updated_at=now()`, [sha, wanted.toString()]);
+        ON CONFLICT (sha256) DO UPDATE SET bytes=GREATEST(upload_quota.bytes,excluded.bytes),active=1,updated_at=now()`, [sha, wanted.toString()]);
       await c.query("COMMIT");
       reserved = true;
     } catch (e) { await c.query("ROLLBACK"); throw e; }
@@ -46,44 +53,50 @@ export async function withUploadQuota(pool: Pool, sha: string, claimed: number, 
   try {
     return await work();
   } finally {
-    // Do not occupy the shared DB pool while a client streams its body. The
-    // active count preserves the reservation through overlapping requests;
-    // a process crash conservatively leaves it charged.
-    const stored = s3Enabled() ? (await blobSize(sha) ?? 0) : await sizeOnDisk(assetBlobPath(sha));
-    const staged = await sizeOnDisk(assetStagingPath(sha));
-    const actual = stored + staged;
-    const cleanup = await pool.connect();
-    try {
-      await cleanup.query("BEGIN");
-      const row = await cleanup.query("SELECT bytes::text,active FROM upload_quota WHERE sha256=$1 FOR UPDATE", [sha]);
-      if (row.rowCount) {
-        const active = Math.max(0, row.rows[0].active - 1);
-        if (active === 0 && actual === 0) await cleanup.query("DELETE FROM upload_quota WHERE sha256=$1", [sha]);
-        else await cleanup.query("UPDATE upload_quota SET bytes=$2,active=$3,updated_at=now() WHERE sha256=$1", [sha, active ? (BigInt(row.rows[0].bytes) > BigInt(actual) ? row.rows[0].bytes : String(actual)) : String(actual), active]);
-      }
-      await cleanup.query("COMMIT");
-    } catch (e) { await cleanup.query("ROLLBACK"); throw e; }
-    finally { cleanup.release(); }
+    await reconcileLease(pool, sha);
   }
 }
 
-/** Reconcile staging files removed by the stale-file reaper. Conservative
- * crash reservations with active>0 remain charged for operator review. */
-export async function releaseReapedUploadQuota(pool: Pool, shas: string[]): Promise<void> {
-  for (const sha of shas) {
-    const stored = s3Enabled() ? (await blobSize(sha) ?? 0) : await sizeOnDisk(assetBlobPath(sha));
+/** The durable active lease excludes both writers and reapers until the
+ * storage probes AND reconciliation finish. No connection is held while
+ * bytes stream. A crash retains the lease and charge for operator recovery. */
+async function reconcileLease(pool: Pool, sha: string): Promise<void> {
+  const stored = s3Enabled() ? (await blobSize(sha) ?? 0) : await sizeOnDisk(assetBlobPath(sha));
+  const staged = await sizeOnDisk(assetStagingPath(sha));
+  const actual = stored + staged;
+  const c = await pool.connect();
+  try {
+    await c.query("BEGIN");
+    const row = await c.query("SELECT active FROM upload_quota WHERE sha256=$1 FOR UPDATE", [sha]);
+    if (row.rows[0]?.active !== 1) throw new Error("upload lease lost");
+    if (actual === 0) await c.query("DELETE FROM upload_quota WHERE sha256=$1", [sha]);
+    else await c.query("UPDATE upload_quota SET bytes=$2,active=0,updated_at=now() WHERE sha256=$1", [sha, actual]);
+    await c.query("COMMIT");
+  } catch (e) { await c.query("ROLLBACK"); throw e; }
+  finally { c.release(); }
+}
+
+/** Reap before reserving new quota, so a full budget can still recover stale
+ * staging. Never remove a file while an upload or reconciliation owns it. */
+export async function reapUploadQuotaStaging(pool: Pool): Promise<void> {
+  await reapStaleAssetStaging(async (sha, reap) => {
     const c = await pool.connect();
     try {
       await c.query("BEGIN");
-      const row = await c.query("SELECT active FROM upload_quota WHERE sha256=$1 FOR UPDATE", [sha]);
-      if (row.rows[0]?.active === 0) {
-        if (stored) await c.query("UPDATE upload_quota SET bytes=$2,updated_at=now() WHERE sha256=$1", [sha, stored]);
-        else await c.query("DELETE FROM upload_quota WHERE sha256=$1", [sha]);
+      const config = await c.query("SELECT initialized,store_identity FROM upload_quota_config WHERE id=true FOR UPDATE");
+      const row = await c.query("SELECT active FROM upload_quota WHERE sha256=$1", [sha]);
+      if (!config.rows[0]?.initialized || config.rows[0].store_identity !== storeIdentity() || row.rows[0]?.active) {
+        await c.query("ROLLBACK");
+        return;
       }
+      await c.query(`INSERT INTO upload_quota(sha256,bytes,active) VALUES($1,0,1)
+        ON CONFLICT(sha256) DO UPDATE SET active=1`, [sha]);
       await c.query("COMMIT");
     } catch (e) { await c.query("ROLLBACK"); throw e; }
     finally { c.release(); }
-  }
+    try { await reap(); }
+    finally { await reconcileLease(pool, sha); }
+  });
 }
 
 /** One-time inventory, while all old upload workers/import jobs are stopped.

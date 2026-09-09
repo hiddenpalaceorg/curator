@@ -63,7 +63,9 @@ const ASSET_STAGING_TTL_MS = 24 * 3600_000;
 
 /** Remove asset staging files past the TTL. Best-effort and opportunistic —
  *  the asset upload route calls it before staging a fresh chunk. */
-export async function reapStaleAssetStaging(): Promise<string[]> {
+export async function reapStaleAssetStaging(
+  guard?: (sha: string, reap: () => Promise<void>) => Promise<void>
+): Promise<string[]> {
   const reaped: string[] = [];
   const dir = path.join(assetStoreDir(), ".staging");
   const cutoff = Date.now() - ASSET_STAGING_TTL_MS;
@@ -74,13 +76,19 @@ export async function reapStaleAssetStaging(): Promise<string[]> {
     return reaped;
   }
   for (const name of names) {
-    if (!name.endsWith(".part") || name.startsWith("media-")) continue;
+    if (!/^[0-9a-f]{64}\.part$/.test(name)) continue;
     const p = path.join(dir, name);
     try {
-      if ((await fsp.stat(p)).mtimeMs < cutoff) {
-        await fsp.rm(p, { force: true });
-        if (/^[0-9a-f]{64}\.part$/.test(name)) reaped.push(name.slice(0, 64));
-      }
+      if ((await fsp.stat(p)).mtimeMs >= cutoff) continue;
+      const reap = async () => {
+        // Recheck after acquiring the upload's lease, not before it.
+        if ((await fsp.stat(p)).mtimeMs < cutoff) {
+          await fsp.rm(p, { force: true });
+          reaped.push(name.slice(0, 64));
+        }
+      };
+      if (guard) await guard(name.slice(0, 64), reap);
+      else await reap();
     } catch {
       // Raced with another reaper or an active finalize; leave it.
     }
